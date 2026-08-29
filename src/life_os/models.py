@@ -115,6 +115,7 @@ class GoalMilestone(BaseModel):
     title: str
     success_criteria: str
     due_at: datetime
+    capture_knowledge: bool = False
 
 
 class GoalRoutine(BaseModel):

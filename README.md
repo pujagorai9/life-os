@@ -333,6 +333,7 @@ Responsibilities:
 
 - Store confirmed goals, preferences, constraints, relationships, and routines
 - Extract proposed context from user-provided text, documents, or images
+- Accept direct requests from the user and handoffs from every specialist
 - Ask users to confirm durable memory before saving it
 - Record the source, confidence, creation date, and optional expiration date
 - Provide only relevant context to each agent
@@ -341,6 +342,14 @@ Responsibilities:
 - Prevent one user's information from entering another user's memory or retrieval index
 
 The Chief Archivist should store concise structured facts rather than indiscriminately retaining entire conversations.
+
+The Archivist is a horizontal company service, not a department owned by the
+Knowledge Guru. Learning sessions trigger a debrief by default. Any other
+specialist may offer an Archivist handoff when work produces a reusable insight,
+decision, preference, explanation, or artifact. Routine completion data remains
+with Operations and Performance Analytics. Every handoff follows
+**propose → preview → confirm → save**, and the user may invoke the Archivist
+directly at any time.
 
 ## Modus operandi: renewable commitment cycles
 
@@ -411,6 +420,9 @@ future check-ins; already delivered history remains intact.
 Milestones create one-time prompts containing the expected work and due date. A
 study milestone can be assigned to the Chief Archivist, which begins the debrief
 by naming the scheduled source and topic rather than asking a context-free question.
+For non-learning milestones, `capture_knowledge: true` tells the owning specialist
+to offer an Archivist handoff if the work produced reusable knowledge. It does not
+archive the milestone automatically.
 
 ### Archivist study debriefs
 
@@ -495,6 +507,14 @@ loop and preserves the user's domain-level privacy choices.
       "target_type": "at_least",
       "target_value": 3,
       "cadence": "weekly"
+    }
+  ],
+  "milestones": [
+    {
+      "title": "Complete and review one applied exercise",
+      "success_criteria": "A reusable decision note exists",
+      "due_at": "2030-01-08T20:00:00Z",
+      "capture_knowledge": true
     }
   ],
   "routines": [

@@ -197,6 +197,26 @@ def test_learning_milestones_route_to_archivist(tmp_path: Path) -> None:
     assert "each assigned source separately" in milestone_prompt["prompt"]
 
 
+def test_non_learning_milestone_can_offer_archivist_handoff(tmp_path: Path) -> None:
+    client = TestClient(create_app(tmp_path / "api.db"))
+    payload = goal_payload()
+    payload["domain"] = "professional"
+    payload["owner_agent"] = "career_coach"
+    payload["milestones"][0]["capture_knowledge"] = True
+    draft = client.post("/v1/goals", json=payload).json()
+    activation = client.post(
+        f"/v1/goals/{draft['id']}/approve", params={"tenant_id": "tenant-a"}
+    ).json()
+    milestone_prompt = next(
+        prompt
+        for prompt in activation["proposed_tracking_protocol"]["prompts"]
+        if prompt["cadence"] == "once"
+    )
+    assert milestone_prompt["agent_id"] == "career_coach"
+    assert "offer a Chief Archivist handoff" in milestone_prompt["prompt"]
+    assert "save it only after the user confirms" in milestone_prompt["prompt"]
+
+
 def test_goal_amendments_are_versioned(tmp_path: Path) -> None:
     client = TestClient(create_app(tmp_path / "api.db"))
     draft = client.post("/v1/goals", json=goal_payload()).json()

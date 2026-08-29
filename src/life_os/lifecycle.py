@@ -166,10 +166,19 @@ def generate_tracking_protocol(goal: GoalContract) -> TrackingProtocol:
             )
             milestone_agent = AgentId.CHIEF_ARCHIVIST
         else:
+            archive_handoff = (
+                " This work may produce durable, reusable knowledge. If it did, "
+                "offer a Chief Archivist handoff. Preview the proposed record and "
+                "save it only after the user confirms it. Do not archive routine "
+                "completion status."
+                if milestone.capture_knowledge
+                else ""
+            )
             milestone_prompt = (
                 f"Today you committed to: {milestone.title}. "
                 f"Expected scope: {milestone.success_criteria} What did you complete, "
                 "what evidence do you have, what blocked you, and what is the next action?"
+                f"{archive_handoff}"
             )
             milestone_agent = goal.owner_agent
         prompts.append(

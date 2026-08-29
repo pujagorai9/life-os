@@ -109,6 +109,19 @@ def test_specialist_planning_session_preserves_discussion_and_finalizes_draft(
     assert saved_session["goal_id"] == finalized.json()["id"]
 
 
+def test_professional_onboarding_prompt_is_generic(tmp_path: Path) -> None:
+    client = TestClient(create_app(tmp_path / "api.db"))
+    session = client.post(
+        "/v1/planning-sessions",
+        json={"tenant_id": "new-user", "area": "professional"},
+    ).json()
+    opening = session["messages"][0]["content"].casefold()
+    assert "searching for a job" in opening
+    assert "next promotion" in opening
+    assert "personal project" in opening
+    assert "professional brand" in opening
+
+
 def test_goal_approval_creates_editable_tracking_protocol(tmp_path: Path) -> None:
     client = TestClient(create_app(tmp_path / "api.db"))
     client.put(

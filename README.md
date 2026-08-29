@@ -355,6 +355,11 @@ During onboarding, the Chief of Staff asks which parts of life the user wants to
 plan and track. A user may enable any combination and can change the selection
 later.
 
+Every default onboarding question is generic. It may offer broad examples but
+must not mention, infer, or reveal a person's goals, relationships, location,
+projects, health information, or prior conversation content. Personalization begins
+only inside that user's private session after the user supplies or approves context.
+
 | Onboarding option | Owning specialist | Primary question |
 | --- | --- | --- |
 | Career & Professional Growth | Career Coach | What professional outcome should change? |

@@ -77,7 +77,12 @@ AREA_OPTIONS: tuple[LifeAreaOption, ...] = (
 AREA_OWNER = {option.id: option.agent_id for option in AREA_OPTIONS}
 
 INITIAL_GOAL_QUESTIONS: dict[LifeArea, str] = {
-    LifeArea.PROFESSIONAL: "What exact professional outcome would you like to achieve?",
+    LifeArea.PROFESSIONAL: (
+        "What would you like to work on in your professional life? For example, "
+        "you might be searching for a job, planning your next promotion, working "
+        "on a professional or personal project, or building your professional brand. "
+        "You can also choose something else."
+    ),
     LifeArea.LEARNING: "What would you like to understand or become demonstrably capable of doing?",
     LifeArea.BRIEFING: "Which topics, sources, and recent developments should your briefings cover?",
     LifeArea.NUTRITION: "What exact nutrition outcome or meal plan would you like to establish?",

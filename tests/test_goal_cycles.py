@@ -152,7 +152,12 @@ def test_goal_approval_creates_editable_tracking_protocol(tmp_path: Path) -> Non
     ).json()
     assert due[0]["agent_id"] == "nutrition_coach"
     assert any("Complete food log" in item["prompt"] for item in due)
-    assert any(item["agent_id"] == "chief_archivist" for item in due)
+    assert not any(item["agent_id"] == "chief_archivist" for item in due)
+    assert any(
+        item["agent_id"] == "nutrition_coach"
+        and "Today you committed to" in item["prompt"]
+        for item in due
+    )
     delivered = client.patch(
         f"/v1/check-ins/{due[0]['id']}",
         json={"tenant_id": "tenant-a", "status": "delivered"},
@@ -169,6 +174,27 @@ def test_goal_approval_creates_editable_tracking_protocol(tmp_path: Path) -> Non
         params={"tenant_id": "tenant-a", "as_of": "2030-01-07T19:00:00Z"},
     ).json()
     assert any("weekly outreach" in item["prompt"] for item in week_end)
+
+
+def test_learning_milestones_route_to_archivist(tmp_path: Path) -> None:
+    client = TestClient(create_app(tmp_path / "api.db"))
+    payload = goal_payload()
+    payload.update(
+        domain="learning",
+        owner_agent="knowledge_guru",
+        title="Understand an assigned book",
+    )
+    draft = client.post("/v1/goals", json=payload).json()
+    activation = client.post(
+        f"/v1/goals/{draft['id']}/approve", params={"tenant_id": "tenant-a"}
+    ).json()
+    milestone_prompt = next(
+        prompt
+        for prompt in activation["proposed_tracking_protocol"]["prompts"]
+        if prompt["cadence"] == "once"
+    )
+    assert milestone_prompt["agent_id"] == "chief_archivist"
+    assert "each assigned source separately" in milestone_prompt["prompt"]
 
 
 def test_goal_amendments_are_versioned(tmp_path: Path) -> None:

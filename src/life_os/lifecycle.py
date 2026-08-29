@@ -155,21 +155,31 @@ def validate_goal_contract(goal: GoalContract) -> None:
 def generate_tracking_protocol(goal: GoalContract) -> TrackingProtocol:
     prompts: list[TrackingPrompt] = []
     for milestone in goal.milestones:
+        if goal.domain == LifeArea.LEARNING:
+            milestone_prompt = (
+                f"Today you were supposed to study or complete: {milestone.title}. "
+                f"Expected scope: {milestone.success_criteria} First, summarize what "
+                "you learned from each assigned source separately. I will then probe "
+                "your understanding of each concept, help create an interview-recall "
+                "summary, and propose separate Archivist knowledge records for your "
+                "confirmation."
+            )
+            milestone_agent = AgentId.CHIEF_ARCHIVIST
+        else:
+            milestone_prompt = (
+                f"Today you committed to: {milestone.title}. "
+                f"Expected scope: {milestone.success_criteria} What did you complete, "
+                "what evidence do you have, what blocked you, and what is the next action?"
+            )
+            milestone_agent = goal.owner_agent
         prompts.append(
             TrackingPrompt(
                 id=str(uuid.uuid4()),
                 cadence=TrackingCadence.ONCE,
-                prompt=(
-                    f"Today you were supposed to study or complete: {milestone.title}. "
-                    f"Expected scope: {milestone.success_criteria} First, summarize what "
-                    "you learned from each assigned source separately. I will then probe "
-                    "your understanding of each concept, help create an interview-recall "
-                    "summary, and propose separate Archivist knowledge records for your "
-                    "confirmation."
-                ),
+                prompt=milestone_prompt,
                 response_type=PromptResponseType.REFLECTION,
                 due_at=milestone.due_at,
-                agent_id=AgentId.CHIEF_ARCHIVIST,
+                agent_id=milestone_agent,
             )
         )
     for routine in goal.routines:

@@ -1,2 +1,447 @@
-# life-os
-A privacy-first multi-agent architecture for personal planning, accountability, learning, wellbeing, and progress.
+# Personal Operating Company
+
+A privacy-first, multi-agent architecture for helping people plan their lives, follow through on commitments, learn, stay informed, care for their health and relationships, and understand their progress over time.
+
+The system is organized like a small company. The user acts as CEO, a Chief of Staff coordinates specialist agents, and independent company-wide functions provide accountability, analytics, and institutional memory.
+
+## Design principles
+
+1. **Agents represent durable life domains.** Temporary goals—such as finding a job, earning a promotion, completing a project, or preparing for an event—belong inside a stable agent.
+2. **The user remains the CEO.** Agents advise, organize, and prepare actions. The user retains final authority.
+3. **Plans and outcomes are different.** A task is not complete until the user or an approved data source confirms it.
+4. **Deterministic software controls sensitive actions.** Scheduling, permissions, notifications, calculations, and approval gates should not depend entirely on model judgment.
+5. **Memory is explicit.** The system proposes information to remember and allows the user to confirm, edit, expire, or delete it.
+6. **Privacy is a product feature.** Every user receives isolated storage, credentials, retrieval indexes, permissions, and audit records.
+7. **Health-related agents support wellness, not medical diagnosis or treatment.**
+
+## Organization chart
+
+```mermaid
+flowchart TD
+    CEO[User — CEO] --> COS[Chief of Staff]
+
+    COS --> CC[Career Coach]
+    COS --> KG[Knowledge Guru]
+    COS --> BI[Briefing Intern]
+    COS --> NC[Nutrition Coach]
+    COS --> FC[Fitness Coach]
+    COS --> IWG[Inner Wellbeing Guru]
+    COS --> OM[Operations Manager]
+
+    CC --> CAO[Chief Accountability Officer]
+    KG --> CAO
+    BI --> CAO
+    NC --> CAO
+    FC --> CAO
+    IWG --> CAO
+    OM --> CAO
+
+    CAO --> HPA[Head of Performance Analytics]
+    HPA --> COS
+
+    ARCH[Chief Archivist] -. confirmed context .-> COS
+    ARCH -. confirmed context .-> CC
+    ARCH -. confirmed context .-> KG
+    ARCH -. confirmed context .-> BI
+    ARCH -. confirmed context .-> NC
+    ARCH -. confirmed context .-> FC
+    ARCH -. confirmed context .-> IWG
+    ARCH -. confirmed context .-> OM
+
+    SERVICES[Permissions, scheduling, notifications, integrations and private storage] --> COS
+    SERVICES --> CAO
+    SERVICES --> HPA
+```
+
+## Executive office
+
+### User — CEO
+
+The user defines the company's direction and retains final decision-making authority.
+
+The CEO:
+
+- Establishes priorities, goals, and acceptable tradeoffs
+- Chooses which domains and integrations to enable
+- Grants and revokes access to personal data
+- Reviews consequential recommendations
+- Approves external actions
+- Changes strategy when circumstances change
+
+### Chief of Staff
+
+The Chief of Staff is the primary user-facing agent and coordinates the company.
+
+Responsibilities:
+
+- Turn high-level priorities into a realistic daily or weekly plan
+- Route requests to the correct specialist
+- Reconcile competing demands across life domains
+- Protect focus time, recovery time, and important relationships
+- Surface decisions that require CEO attention
+- Combine specialist recommendations into one coherent response
+- Present daily briefings, reviews, and upcoming commitments
+- Prevent the plan from exceeding the user's available time and energy
+
+The Chief of Staff does not replace specialists. It coordinates them and remains responsible for the final user-facing plan.
+
+## Department roles
+
+### Career Coach
+
+The Career Coach manages the user's professional life across changing phases. Job search is one possible goal, not a permanent agent.
+
+Possible goals include:
+
+- Find a new role
+- Onboard successfully
+- Deliver a professional project
+- Meet commitments made at work
+- Develop a professional network
+- Build a public professional brand
+- Prepare for a promotion
+- Change functions or industries
+- Start a business or independent practice
+
+Responsibilities:
+
+- Convert professional goals into outcomes, milestones, and next actions
+- Maintain project and commitment pipelines
+- Track deadlines, stakeholders, dependencies, and blockers
+- Prepare meeting agendas and capture approved follow-up actions
+- Maintain an accomplishment and evidence log
+- Support applications, interviews, promotion cases, and career decisions
+- Manage professional-brand workflows such as articles, talks, networking, and portfolio updates
+- Draft communications while requiring approval before sending
+
+The Career Coach owns professional outcomes. When an outcome requires a new skill, it requests help from the Knowledge Guru.
+
+### Knowledge Guru
+
+The Knowledge Guru develops durable knowledge and capability.
+
+Responsibilities:
+
+- Convert learning goals into curricula and practice plans
+- Organize books, courses, notes, exercises, and reference material
+- Explain unfamiliar concepts at the user's preferred level
+- Generate retrieval practice, flashcards, quizzes, and application exercises
+- Track mastery separately from content consumption
+- Identify knowledge gaps revealed by professional work
+- Connect new concepts to existing knowledge
+- Schedule spaced review and periodic skill assessments
+
+The Knowledge Guru answers: **“What should I understand, remember, or become capable of doing?”**
+
+### Briefing Intern
+
+The Briefing Intern monitors recent external developments and produces concise, traceable briefings.
+
+Responsibilities:
+
+- Ingest approved publications, newsletters, feeds, saved articles, and public sources
+- Summarize new information with source links and publication dates
+- Deduplicate overlapping coverage
+- Separate reported facts, analysis, opinion, and uncertainty
+- Rank information according to user-defined interests and goals
+- Maintain a reading queue
+- Track which briefings were opened or marked useful
+- Compare summaries against source material and record quality feedback
+- Escalate durable learning opportunities to the Knowledge Guru
+- Escalate actionable professional developments to the Career Coach
+
+The Briefing Intern answers: **“What changed recently, and why might it matter?”**
+
+### Nutrition Coach
+
+The Nutrition Coach helps users plan meals and record food with minimal friction.
+
+Responsibilities:
+
+- Accept meal logs through text, voice, photographs, barcodes, recipes, or saved favorites
+- Estimate portions, calories, and nutrients while preserving uncertainty
+- Ask for confirmation when an estimate could materially affect the record
+- Support user-defined meal schedules, preferences, budgets, and restrictions
+- Suggest meal options and grocery lists
+- Track user-selected nutrition goals and consistency
+- Send confirmed nutrition events to Performance Analytics
+
+The Nutrition Coach must not diagnose conditions, prescribe treatment, or present estimated nutrition values as exact. Users with clinician-managed diets should be able to enter a professional-provided plan.
+
+### Fitness Coach
+
+The Fitness Coach supports physical activity, sleep, and recovery.
+
+Responsibilities:
+
+- Create activity plans based on user-defined goals and constraints
+- Track workouts, movement, consistency, and recovery
+- Accept manual logs and approved wearable or health-platform data
+- Distinguish planned workouts from confirmed completion
+- Track strength, endurance, mobility, sleep, and other enabled metrics
+- Adjust ordinary plans based on adherence and user-reported recovery
+- Detect scheduling conflicts and recommend realistic alternatives
+- Send confirmed activity and recovery events to Performance Analytics
+
+The Fitness Coach must not diagnose injuries or encourage users to ignore serious symptoms. Medical decisions remain outside its scope.
+
+### Inner Wellbeing Guru
+
+The Inner Wellbeing Guru supports private reflection and intentional personal practices.
+
+Responsibilities:
+
+- Guide journaling and emotional processing
+- Facilitate gratitude, accomplishment, and affirmation practices
+- Support meditation and reflection routines
+- Help users identify values, patterns, and intentional next actions
+- Track practice completion without judging the content
+- Let users decide whether any derived insight may be shared with another agent
+- Keep raw journal content private by default
+
+The Inner Wellbeing Guru is not a therapist, crisis service, or diagnostic system. The product should provide appropriate crisis and professional-help pathways when necessary.
+
+### Operations Manager
+
+The Operations Manager handles personal and household logistics so users can devote more attention to the people and experiences involved.
+
+Responsibilities:
+
+- Coordinate household schedules, recurring routines, and appointments
+- Manage shared lists, purchases, maintenance, and administrative tasks
+- Support relationship rituals and important occasions
+- Plan travel and events
+- Coordinate care routines for dependents and pets
+- Organize private photographs and memory projects
+- Draft messages, reservations, posts, or purchases for approval
+- Track recurring obligations without treating relationships as productivity metrics
+
+External communication, booking, purchasing, and publishing always pass through an approval gate.
+
+## Company-wide functions
+
+### Chief Accountability Officer
+
+The Chief Accountability Officer works across every department and closes the gap between intention and action.
+
+Responsibilities:
+
+- Convert accepted plans into explicit commitments
+- Validate that commitments have a clear outcome and reasonable deadline
+- Schedule check-ins according to user preferences and quiet hours
+- Request a status such as `done`, `partial`, `blocked`, `skipped`, or `rescheduled`
+- Record user-provided evidence when appropriate
+- Identify repeated avoidance, unrealistic scope, and recurring blockers
+- Recommend smaller commitments or renegotiated deadlines
+- Prevent activity from being mistaken for achievement
+- Send confirmed outcomes to Performance Analytics
+
+The Chief Accountability Officer may challenge a plan, but it cannot redefine the CEO's goals.
+
+### Head of Performance Analytics
+
+The Head of Performance Analytics converts confirmed events into understandable progress reporting.
+
+Responsibilities:
+
+- Produce daily, weekly, monthly, and quarterly reports
+- Compare planned commitments with confirmed outcomes
+- Track progress by domain, goal, project, and routine
+- Identify trends, bottlenecks, and recurring blockers
+- Distinguish behavior metrics from outcome metrics
+- Preserve uncertainty and provenance
+- Generate charts using deterministic calculations
+- Let users choose whether to create a cross-domain summary
+
+The model may explain a trend, but it must not calculate or invent the underlying numbers. Metrics should be generated from stored events in ordinary application code.
+
+### Chief Archivist
+
+The Chief Archivist maintains the company's confirmed institutional memory.
+
+Responsibilities:
+
+- Store confirmed goals, preferences, constraints, relationships, and routines
+- Extract proposed context from user-provided text, documents, or images
+- Ask users to confirm durable memory before saving it
+- Record the source, confidence, creation date, and optional expiration date
+- Provide only relevant context to each agent
+- Enforce domain-level privacy boundaries
+- Support viewing, editing, exporting, expiring, and deleting memories
+- Prevent one user's information from entering another user's memory or retrieval index
+
+The Chief Archivist should store concise structured facts rather than indiscriminately retaining entire conversations.
+
+## How the company operates
+
+The normal workflow is:
+
+```text
+CEO provides a goal or update
+        ↓
+Chief of Staff selects the appropriate department
+        ↓
+Department proposes a plan or next action
+        ↓
+CEO accepts, edits, or rejects the proposal
+        ↓
+Chief Accountability Officer registers the commitment
+        ↓
+Scheduler delivers reminders and check-ins
+        ↓
+User or approved source confirms the outcome
+        ↓
+Head of Performance Analytics updates reports
+        ↓
+Chief of Staff uses the results in the next planning cycle
+```
+
+The Chief Archivist supplies relevant confirmed context throughout this flow.
+
+## Standard commitment record
+
+All departments should create commitments using the same contract:
+
+```json
+{
+  "user_id": "user_123",
+  "domain": "professional",
+  "goal_id": "goal_456",
+  "commitment": "Complete the first draft of the project proposal",
+  "minimum_success": "A reviewable draft exists",
+  "due_at": "2030-01-15T17:00:00Z",
+  "evidence_policy": "user_confirmation",
+  "reminder_policy": "one_day_then_two_hours",
+  "status": "planned"
+}
+```
+
+## Standard progress event
+
+Agents submit confirmed observations through a shared event format:
+
+```json
+{
+  "user_id": "user_123",
+  "domain": "fitness",
+  "goal_id": "goal_789",
+  "metric": "workout_completed",
+  "value": 1,
+  "unit": "session",
+  "source": "user_confirmed",
+  "confidence": 1.0,
+  "occurred_at": "2030-01-14T18:30:00Z"
+}
+```
+
+Every event should include provenance. Estimated, inferred, imported, and user-confirmed values must remain distinguishable.
+
+## Supporting services that are not agents
+
+These components should be implemented as predictable software services:
+
+### Identity and tenant isolation
+
+- Separate every user's records with a tenant identifier
+- Enforce isolation at the database level
+- Use separate authorization grants for each user and provider
+- Prevent shared personal-memory indexes
+
+### Permission manager
+
+- Request the narrowest useful access
+- Support per-domain and per-source consent
+- Let users pause synchronization without deleting their account
+- Make revocation easy and visible
+
+### Scheduler
+
+- Support time zones, quiet hours, recurrence, retries, and idempotency
+- Prevent duplicate reminders and notification storms
+- Continue operating reliably without model involvement
+
+### Notification service
+
+- Deliver approved push, email, or messaging notifications
+- Deep-link to actions such as done, partial, blocked, or reschedule
+- Respect per-channel preferences and frequency limits
+
+### Approval gateway
+
+Require explicit approval before:
+
+- Sending a message or email
+- Publishing content
+- Submitting an application or form
+- Making a purchase or reservation
+- Modifying an external calendar
+- Sharing private information with another person or service
+
+### Connector layer
+
+Integrations may include:
+
+- Email and calendar providers
+- Health and wearable platforms
+- Task and project-management systems
+- Newsletters, feeds, and saved-reading services
+- Cloud file storage
+- Professional and publishing platforms
+
+Each connector should expose a narrow, auditable interface rather than unrestricted account access.
+
+### Private data stores
+
+Use separate stores or access policies for:
+
+- Operational tasks and commitments
+- Progress events
+- Long-term confirmed memory
+- Health and wellbeing records
+- Documents and images
+- OAuth credentials and other secrets
+- Audit records
+
+## Privacy and safety requirements
+
+An implementation intended for multiple users should include:
+
+- Encryption in transit and at rest
+- Database-enforced tenant isolation
+- Per-user OAuth credentials
+- Secrets stored outside application logs and model prompts
+- No raw personal content in analytics or tracing systems
+- Separate access controls for health, journal, family, and professional data
+- User-controlled data export and deletion
+- Configurable retention and automatic expiration
+- An audit view showing what every agent accessed and attempted
+- Explicit approval for external side effects
+- Tests that attempt cross-user data access
+- Clear health, wellbeing, and financial scope limitations
+
+## Configurability
+
+Users should be able to:
+
+- Enable only the departments they want
+- Rename roles without changing their capabilities
+- Choose communication tone and reminder style
+- Set quiet hours and escalation limits
+- Define which agents may share derived information
+- Choose which sources count as evidence
+- Set domain-specific retention rules
+- Replace or extend departments through a stable agent interface
+
+The role names provide personality. The underlying interfaces should remain functional and stable so communities can create alternative personas without forking the architecture.
+
+## Summary
+
+The Personal Operating Company has:
+
+- One CEO: the user
+- One coordinating executive: the Chief of Staff
+- Seven domain specialists
+- Three independent company-wide functions
+- Deterministic infrastructure for permissions, schedules, notifications, calculations, approvals, integrations, and storage
+
+This structure remains stable as a user's goals change. New goals become initiatives within the appropriate department instead of creating a new agent for every phase of life.

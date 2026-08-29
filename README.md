@@ -1,4 +1,4 @@
-# Personal Operating Company
+# Life OS
 
 A privacy-first, multi-agent architecture for helping people plan their lives, follow through on commitments, learn, stay informed, care for their health and relationships, and understand their progress over time.
 

@@ -274,7 +274,9 @@ def schedule_protocol(goal: GoalContract, protocol: TrackingProtocol) -> list[Sc
         elif prompt.cadence == TrackingCadence.END_OF_CYCLE:
             occurrences = [goal.review_at]
         else:
-            first = _with_preferred_time(goal.start_at, prompt.preferred_time)
+            first = _first_recurring_due_at(
+                goal.start_at, goal.review_at, prompt.cadence, prompt.preferred_time
+            )
             if first < goal.start_at:
                 first = _next_occurrence(first, prompt.cadence)
             occurrences = []
@@ -296,6 +298,26 @@ def schedule_protocol(goal: GoalContract, protocol: TrackingProtocol) -> list[Sc
             for due_at in occurrences
         )
     return check_ins
+
+
+def _first_recurring_due_at(
+    start_at: datetime,
+    review_at: datetime,
+    cadence: TrackingCadence,
+    preferred_time: str | None,
+) -> datetime:
+    first = _with_preferred_time(start_at, preferred_time)
+    if cadence == TrackingCadence.DAILY:
+        return first
+    if cadence == TrackingCadence.WEEKLY:
+        return min(first + timedelta(days=6), review_at)
+    if cadence == TrackingCadence.MONTHLY:
+        return min(_add_months(first, 1) - timedelta(days=1), review_at)
+    if cadence == TrackingCadence.QUARTERLY:
+        return min(_add_months(first, 3) - timedelta(days=1), review_at)
+    if cadence == TrackingCadence.YEARLY:
+        return min(_add_months(first, 12) - timedelta(days=1), review_at)
+    raise ValueError(f"Unsupported recurring cadence: {cadence}")
 
 
 def _with_preferred_time(value: datetime, preferred_time: str | None) -> datetime:

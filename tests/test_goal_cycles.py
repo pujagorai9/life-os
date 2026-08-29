@@ -42,6 +42,14 @@ def goal_payload() -> dict:
                 "unit": "log",
                 "minimum_success": "All meals are recorded",
                 "preferred_time": "20:30",
+            },
+            {
+                "title": "Complete weekly outreach",
+                "cadence": "weekly",
+                "target_count": 3,
+                "unit": "message",
+                "minimum_success": "Three messages are sent",
+                "preferred_time": "18:00",
             }
         ],
     }
@@ -142,6 +150,12 @@ def test_goal_approval_creates_editable_tracking_protocol(tmp_path: Path) -> Non
         params={"tenant_id": "tenant-a", "as_of": "2030-01-01T21:00:00Z"},
     ).json()
     assert due[0]["id"] not in {item["id"] for item in remaining}
+    assert not any("weekly outreach" in item["prompt"] for item in due)
+    week_end = client.get(
+        "/v1/check-ins/due",
+        params={"tenant_id": "tenant-a", "as_of": "2030-01-07T19:00:00Z"},
+    ).json()
+    assert any("weekly outreach" in item["prompt"] for item in week_end)
 
 
 def test_goal_amendments_are_versioned(tmp_path: Path) -> None:

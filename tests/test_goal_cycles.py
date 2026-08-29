@@ -1,0 +1,223 @@
+from datetime import datetime, timezone
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from life_os.api import create_app
+
+
+def goal_payload() -> dict:
+    return {
+        "tenant_id": "tenant-a",
+        "domain": "nutrition",
+        "owner_agent": "nutrition_coach",
+        "title": "Follow an agreed nutrition plan",
+        "motivation": "Support steady energy",
+        "success_definition": "Stay within the approved calorie range most days",
+        "start_at": "2030-01-01T08:00:00Z",
+        "review_at": "2030-01-29T08:00:00Z",
+        "metrics": [
+            {
+                "key": "daily_calories",
+                "label": "Daily calories",
+                "unit": "kcal",
+                "target_type": "range",
+                "minimum_value": 1800,
+                "maximum_value": 2200,
+                "cadence": "daily",
+            }
+        ],
+        "routines": [
+            {
+                "title": "Complete food log",
+                "cadence": "daily",
+                "target_count": 1,
+                "unit": "log",
+                "minimum_success": "All meals are recorded",
+                "preferred_time": "20:30",
+            }
+        ],
+    }
+
+
+def test_onboarding_makes_briefing_explicit(tmp_path: Path) -> None:
+    client = TestClient(create_app(tmp_path / "api.db"))
+    options = client.get("/v1/onboarding/options").json()
+    briefing = next(option for option in options if option["id"] == "briefing")
+    assert briefing["title"] == "News & Industry Briefings"
+    assert briefing["agent_id"] == "briefing_intern"
+
+    response = client.put(
+        "/v1/onboarding/selection",
+        json={"tenant_id": "tenant-a", "selected_areas": ["nutrition", "briefing"]},
+    )
+    assert response.status_code == 200
+    saved = client.get(
+        "/v1/onboarding/selection", params={"tenant_id": "tenant-a"}
+    ).json()
+    assert saved["selected_areas"] == ["nutrition", "briefing"]
+
+
+def test_specialist_planning_session_preserves_discussion_and_finalizes_draft(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_app(tmp_path / "api.db"))
+    client.put(
+        "/v1/onboarding/selection",
+        json={"tenant_id": "tenant-a", "selected_areas": ["nutrition"]},
+    )
+    session = client.post(
+        "/v1/planning-sessions",
+        json={"tenant_id": "tenant-a", "area": "nutrition"},
+    ).json()
+    assert session["agent_id"] == "nutrition_coach"
+    assert "exact nutrition outcome" in session["messages"][0]["content"]
+
+    turn = client.post(
+        f"/v1/planning-sessions/{session['id']}/messages",
+        json={"tenant_id": "tenant-a", "message": "I want a four-week plan."},
+    )
+    assert turn.status_code == 200
+    assert len(turn.json()["session"]["messages"]) == 3
+
+    finalized = client.post(
+        f"/v1/planning-sessions/{session['id']}/finalize",
+        json={"tenant_id": "tenant-a", "goal": goal_payload()},
+    )
+    assert finalized.status_code == 200
+    assert finalized.json()["status"] == "draft"
+    saved_session = client.get(
+        f"/v1/planning-sessions/{session['id']}",
+        params={"tenant_id": "tenant-a"},
+    ).json()
+    assert saved_session["status"] == "finalized"
+    assert saved_session["goal_id"] == finalized.json()["id"]
+
+
+def test_goal_approval_creates_editable_tracking_protocol(tmp_path: Path) -> None:
+    client = TestClient(create_app(tmp_path / "api.db"))
+    client.put(
+        "/v1/onboarding/selection",
+        json={"tenant_id": "tenant-a", "selected_areas": ["nutrition"]},
+    )
+    draft = client.post("/v1/goals", json=goal_payload()).json()
+    assert draft["status"] == "draft"
+
+    activation = client.post(
+        f"/v1/goals/{draft['id']}/approve", params={"tenant_id": "tenant-a"}
+    )
+    assert activation.status_code == 200
+    result = activation.json()
+    assert result["goal"]["status"] == "active"
+    prompts = result["proposed_tracking_protocol"]["prompts"]
+    assert {prompt["cadence"] for prompt in prompts} >= {"daily", "end_of_cycle"}
+    assert result["proposed_tracking_protocol"]["approved"] is False
+
+    approval = client.post(
+        f"/v1/goals/{draft['id']}/tracking-protocol/approval",
+        json={"tenant_id": "tenant-a", "approved": True},
+    )
+    assert approval.json()["approved"] is True
+    due = client.get(
+        "/v1/check-ins/due",
+        params={"tenant_id": "tenant-a", "as_of": "2030-01-01T21:00:00Z"},
+    ).json()
+    assert due[0]["agent_id"] == "nutrition_coach"
+    assert any("Complete food log" in item["prompt"] for item in due)
+    delivered = client.patch(
+        f"/v1/check-ins/{due[0]['id']}",
+        json={"tenant_id": "tenant-a", "status": "delivered"},
+    )
+    assert delivered.json()["status"] == "delivered"
+    remaining = client.get(
+        "/v1/check-ins/due",
+        params={"tenant_id": "tenant-a", "as_of": "2030-01-01T21:00:00Z"},
+    ).json()
+    assert due[0]["id"] not in {item["id"] for item in remaining}
+
+
+def test_goal_amendments_are_versioned(tmp_path: Path) -> None:
+    client = TestClient(create_app(tmp_path / "api.db"))
+    draft = client.post("/v1/goals", json=goal_payload()).json()
+    revised = client.post(
+        f"/v1/goals/{draft['id']}/amendments",
+        json={
+            "tenant_id": "tenant-a",
+            "reason": "The first review window was too short",
+            "changes": {"review_at": "2030-02-05T08:00:00Z"},
+        },
+    )
+    assert revised.status_code == 200
+    assert revised.json()["version"] == 2
+    history = client.get(
+        f"/v1/goals/{draft['id']}/amendments", params={"tenant_id": "tenant-a"}
+    ).json()
+    assert history[0]["from_version"] == 1
+    assert history[0]["to_version"] == 2
+    protocol = client.get(
+        f"/v1/goals/{draft['id']}/tracking-protocol",
+        params={"tenant_id": "tenant-a"},
+    ).json()
+    assert protocol["goal_version"] == 2
+    assert protocol["approved"] is False
+
+
+def test_due_review_uses_goal_statistics_and_renews_cycle(tmp_path: Path) -> None:
+    client = TestClient(create_app(tmp_path / "api.db"))
+    draft = client.post("/v1/goals", json=goal_payload()).json()
+    client.post(f"/v1/goals/{draft['id']}/approve", params={"tenant_id": "tenant-a"})
+    commitment = client.post(
+        "/v1/commitments",
+        json={
+            "tenant_id": "tenant-a",
+            "domain": "nutrition",
+            "goal_id": draft["id"],
+            "title": "Complete food log",
+            "minimum_success": "All meals recorded",
+        },
+    ).json()
+    client.patch(
+        f"/v1/commitments/{commitment['id']}",
+        params={"tenant_id": "tenant-a", "status": "done"},
+    )
+    client.post(
+        "/v1/events",
+        json={
+            "tenant_id": "tenant-a",
+            "domain": "nutrition",
+            "goal_id": draft["id"],
+            "metric": "daily_calories",
+            "value": 2000,
+            "unit": "kcal",
+            "source": "user_confirmed",
+            "confidence": 1,
+        },
+    )
+
+    due = client.get(
+        "/v1/reviews/due",
+        params={"tenant_id": "tenant-a", "as_of": "2030-01-30T08:00:00Z"},
+    ).json()
+    assert [goal["id"] for goal in due] == [draft["id"]]
+
+    review = client.post(
+        f"/v1/goals/{draft['id']}/review", params={"tenant_id": "tenant-a"}
+    ).json()
+    assert review["specialist_agent"] == "nutrition_coach"
+    assert review["statistics"]["completion_rate"] == 1
+    assert review["statistics"]["metric_totals"]["daily_calories.kcal"] == 2000
+    assert review["goal"]["status"] == "awaiting_review"
+
+    renewed = client.post(
+        f"/v1/goals/{draft['id']}/renew",
+        json={
+            "tenant_id": "tenant-a",
+            "start_at": "2030-02-01T08:00:00Z",
+            "review_at": "2030-03-01T08:00:00Z",
+        },
+    )
+    assert renewed.status_code == 200
+    next_cycle = renewed.json()
+    assert next_cycle["cycle_number"] == 2
+    assert next_cycle["previous_cycle_id"] == draft["id"]
+    assert next_cycle["status"] == "draft"

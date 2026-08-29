@@ -5,11 +5,13 @@ import json
 import os
 
 import uvicorn
+from dotenv import load_dotenv
 
 from life_os.agent_catalog import list_agents
 
 
 def main() -> None:
+    load_dotenv()
     parser = argparse.ArgumentParser(prog="life-os")
     subcommands = parser.add_subparsers(dest="command", required=True)
 

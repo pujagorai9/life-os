@@ -23,14 +23,5 @@ share_journal_content = false
 share_health_details_across_domains = false
 allow_external_actions_without_approval = false
 
-[[goals]]
-id = "example-professional-goal"
-domain = "professional"
-title = "Deliver an important professional project"
-status = "active"
-
-[[goals]]
-id = "example-health-goal"
-domain = "fitness"
-title = "Build a sustainable weekly movement routine"
-status = "active"
+# Goals are created as tenant-owned Goal Contracts through onboarding.
+# Do not place personal goals in a public configuration file.

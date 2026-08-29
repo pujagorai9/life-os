@@ -3,7 +3,7 @@ from __future__ import annotations
 from life_os.agent_catalog import get_agent
 from life_os.config import load_profile
 from life_os.llm import LLMClient, default_client
-from life_os.models import AgentId, AgentOutput, ChatRequest, Profile
+from life_os.models import AgentId, AgentOutput, ChatRequest, GoalStatus, LifeArea, Profile
 from life_os.store import LifeOSStore
 
 
@@ -28,6 +28,16 @@ ROUTING_KEYWORDS: dict[AgentId, tuple[str, ...]] = {
         "progress", "chart", "trend", "report", "analytics", "monthly", "weekly review",
     ),
     AgentId.CHIEF_ARCHIVIST: ("remember", "memory", "forget", "preference", "context"),
+}
+
+AGENT_AREAS: dict[AgentId, LifeArea] = {
+    AgentId.CAREER_COACH: LifeArea.PROFESSIONAL,
+    AgentId.KNOWLEDGE_GURU: LifeArea.LEARNING,
+    AgentId.BRIEFING_INTERN: LifeArea.BRIEFING,
+    AgentId.NUTRITION_COACH: LifeArea.NUTRITION,
+    AgentId.FITNESS_COACH: LifeArea.FITNESS,
+    AgentId.INNER_WELLBEING_GURU: LifeArea.WELLBEING,
+    AgentId.OPERATIONS_MANAGER: LifeArea.OPERATIONS,
 }
 
 
@@ -55,10 +65,28 @@ class LifeOS:
         agent_id = request.agent_id or self.route(request.message)
         if agent_id not in self.profile.enabled_agents:
             agent_id = AgentId.CHIEF_OF_STAFF
+        selection = self.store.get_onboarding_selection(request.tenant_id)
+        if (
+            selection
+            and agent_id in AGENT_AREAS
+            and AGENT_AREAS[agent_id] not in selection.selected_areas
+        ):
+            agent_id = AgentId.CHIEF_OF_STAFF
         agent = get_agent(agent_id)
         memories = self.store.confirmed_context(request.tenant_id, agent.domain)
-        active_goals = [goal for goal in self.profile.goals if goal.status == "active"]
-        context_lines = [f"Goal [{goal.domain}]: {goal.title}" for goal in active_goals]
+        stored_goals = self.store.list_goals(request.tenant_id, GoalStatus.ACTIVE)
+        context_lines = [
+            (
+                f"Approved Goal Contract [{goal.domain}] cycle {goal.cycle_number}: "
+                f"{goal.title}; success={goal.success_definition}; review_at={goal.review_at}; "
+                f"metrics={goal.metrics}"
+            )
+            for goal in stored_goals
+            if agent_id == AgentId.CHIEF_OF_STAFF or goal.owner_agent == agent_id
+        ]
+        if not stored_goals:
+            active_goals = [goal for goal in self.profile.goals if goal.status == "active"]
+            context_lines.extend(f"Legacy profile goal [{goal.domain}]: {goal.title}" for goal in active_goals)
         if agent_id == AgentId.BRIEFING_INTERN:
             context_lines.extend(
                 f"Approved source [{source.kind}]: {source.id} via {source.access}"

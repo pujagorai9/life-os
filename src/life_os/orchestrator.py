@@ -94,4 +94,16 @@ class LifeOS:
                 if source.enabled
             )
         context_lines.extend(f"Confirmed memory: {memory.fact}" for memory in memories)
+        if agent_id == AgentId.CHIEF_ARCHIVIST:
+            records = self.store.search_knowledge_records(
+                request.tenant_id, query=request.message, limit=8
+            )
+            context_lines.extend(
+                (
+                    f"Confirmed knowledge record [{record.source_title} / {record.topic}]: "
+                    f"summary={record.user_summary}; interview_recall={record.interview_recall}; "
+                    f"gaps={record.gaps}"
+                )
+                for record in records
+            )
         return self.client.respond(agent, request.message, "\n".join(context_lines))

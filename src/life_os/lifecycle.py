@@ -149,6 +149,24 @@ def validate_goal_contract(goal: GoalContract) -> None:
 
 def generate_tracking_protocol(goal: GoalContract) -> TrackingProtocol:
     prompts: list[TrackingPrompt] = []
+    for milestone in goal.milestones:
+        prompts.append(
+            TrackingPrompt(
+                id=str(uuid.uuid4()),
+                cadence=TrackingCadence.ONCE,
+                prompt=(
+                    f"Today you were supposed to study or complete: {milestone.title}. "
+                    f"Expected scope: {milestone.success_criteria} First, summarize what "
+                    "you learned from each assigned source separately. I will then probe "
+                    "your understanding of each concept, help create an interview-recall "
+                    "summary, and propose separate Archivist knowledge records for your "
+                    "confirmation."
+                ),
+                response_type=PromptResponseType.REFLECTION,
+                due_at=milestone.due_at,
+                agent_id=AgentId.CHIEF_ARCHIVIST,
+            )
+        )
     for routine in goal.routines:
         prompts.append(
             TrackingPrompt(
@@ -249,7 +267,11 @@ def schedule_protocol(goal: GoalContract, protocol: TrackingProtocol) -> list[Sc
     for prompt in protocol.prompts:
         if not prompt.active:
             continue
-        if prompt.cadence == TrackingCadence.END_OF_CYCLE:
+        if prompt.cadence == TrackingCadence.ONCE:
+            if prompt.due_at is None:
+                raise ValueError("One-time tracking prompts require due_at")
+            occurrences = [prompt.due_at]
+        elif prompt.cadence == TrackingCadence.END_OF_CYCLE:
             occurrences = [goal.review_at]
         else:
             first = _with_preferred_time(goal.start_at, prompt.preferred_time)
@@ -267,7 +289,7 @@ def schedule_protocol(goal: GoalContract, protocol: TrackingProtocol) -> list[Sc
                 goal_id=goal.id,
                 protocol_id=protocol.id,
                 prompt_id=prompt.id,
-                agent_id=goal.owner_agent,
+                agent_id=prompt.agent_id or goal.owner_agent,
                 prompt=prompt.prompt,
                 due_at=due_at,
             )

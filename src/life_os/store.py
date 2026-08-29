@@ -20,6 +20,8 @@ from life_os.models import (
     GoalStatus,
     Memory,
     MemoryCreate,
+    KnowledgeRecord,
+    KnowledgeRecordCreate,
     OnboardingSelection,
     ProgressEvent,
     ProgressEventCreate,
@@ -161,8 +163,106 @@ class LifeOSStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_planning_sessions
                     ON goal_planning_sessions (tenant_id, status, updated_at);
+
+                CREATE TABLE IF NOT EXISTS knowledge_records (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    goal_id TEXT,
+                    source_title TEXT NOT NULL,
+                    topic TEXT NOT NULL,
+                    studied_at TEXT NOT NULL,
+                    confirmed INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_knowledge_records
+                    ON knowledge_records (tenant_id, confirmed, studied_at);
                 """
             )
+
+    def propose_knowledge_record(self, request: KnowledgeRecordCreate) -> KnowledgeRecord:
+        record = KnowledgeRecord(id=str(uuid.uuid4()), **request.model_dump())
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO knowledge_records
+                   (id, tenant_id, goal_id, source_title, topic, studied_at,
+                    confirmed, payload, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    record.id,
+                    record.tenant_id,
+                    record.goal_id,
+                    record.source_title,
+                    record.topic,
+                    _iso(record.studied_at),
+                    int(record.confirmed),
+                    _json(record),
+                    _iso(record.created_at),
+                ),
+            )
+        return record
+
+    def confirm_knowledge_record(
+        self, tenant_id: str, record_id: str
+    ) -> KnowledgeRecord:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT payload FROM knowledge_records
+                   WHERE tenant_id = ? AND id = ?""",
+                (tenant_id, record_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("Knowledge record not found")
+            record = KnowledgeRecord.model_validate_json(row["payload"])
+            record.confirmed = True
+            connection.execute(
+                """UPDATE knowledge_records SET confirmed = 1, payload = ?
+                   WHERE tenant_id = ? AND id = ?""",
+                (_json(record), tenant_id, record_id),
+            )
+        return record
+
+    def search_knowledge_records(
+        self,
+        tenant_id: str,
+        query: str = "",
+        source_title: str | None = None,
+        limit: int = 20,
+    ) -> list[KnowledgeRecord]:
+        sql = "SELECT payload FROM knowledge_records WHERE tenant_id = ? AND confirmed = 1"
+        values: list[object] = [tenant_id]
+        if source_title:
+            sql += " AND lower(source_title) = lower(?)"
+            values.append(source_title)
+        sql += " ORDER BY studied_at DESC"
+        with self._connect() as connection:
+            rows = connection.execute(sql, values).fetchall()
+        records = [KnowledgeRecord.model_validate_json(row["payload"]) for row in rows]
+        tokens = {token for token in query.casefold().split() if len(token) >= 3}
+        if not tokens:
+            return records[:limit]
+
+        def score(record: KnowledgeRecord) -> int:
+            searchable = " ".join(
+                [
+                    record.source_title,
+                    record.topic,
+                    record.expected_scope,
+                    record.user_summary,
+                    record.interview_recall,
+                    *record.strengths,
+                    *record.gaps,
+                    *record.tags,
+                ]
+            ).casefold()
+            return sum(token in searchable for token in tokens)
+
+        ranked = sorted(
+            ((score(record), record) for record in records),
+            key=lambda item: (item[0], item[1].studied_at),
+            reverse=True,
+        )
+        return [record for relevance, record in ranked if relevance > 0][:limit]
 
     def save_planning_session(self, session: GoalPlanningSession) -> GoalPlanningSession:
         with self._connect() as connection:

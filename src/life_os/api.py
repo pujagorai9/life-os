@@ -40,6 +40,8 @@ from life_os.models import (
     GoalReviewPacket,
     GoalStatus,
     LifeAreaOption,
+    KnowledgeRecord,
+    KnowledgeRecordCreate,
     Memory,
     MemoryCreate,
     OnboardingSelection,
@@ -62,7 +64,7 @@ from life_os.store import LifeOSStore
 
 
 def create_app(database: str | Path | None = None) -> FastAPI:
-    app = FastAPI(title="Life OS", version="0.2.0")
+    app = FastAPI(title="Life OS", version="0.3.0")
     store = LifeOSStore(database or os.getenv("LIFE_OS_DATABASE", "life_os.db"))
     runtime = LifeOS(store=store, profile=load_profile())
 
@@ -353,6 +355,32 @@ def create_app(database: str | Path | None = None) -> FastAPI:
             return store.confirm_memory(tenant_id, memory_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @app.post("/v1/knowledge-records", response_model=KnowledgeRecord)
+    def propose_knowledge_record(request: KnowledgeRecordCreate) -> KnowledgeRecord:
+        return store.propose_knowledge_record(request)
+
+    @app.post(
+        "/v1/knowledge-records/{record_id}/confirm", response_model=KnowledgeRecord
+    )
+    def confirm_knowledge_record(
+        record_id: str, tenant_id: str = Query(...)
+    ) -> KnowledgeRecord:
+        try:
+            return store.confirm_knowledge_record(tenant_id, record_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @app.get("/v1/knowledge-records", response_model=list[KnowledgeRecord])
+    def knowledge_records(
+        tenant_id: str = Query(...),
+        query: str = Query(""),
+        source_title: str | None = Query(None),
+        limit: int = Query(20, ge=1, le=100),
+    ) -> list[KnowledgeRecord]:
+        return store.search_knowledge_records(
+            tenant_id, query=query, source_title=source_title, limit=limit
+        )
 
     return app
 

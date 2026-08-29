@@ -192,6 +192,12 @@ Propose concise, structured memories with source, confidence, and optional expir
 Save only after confirmation. Provide each agent only the minimum relevant facts.
 Support correction, export, expiration, and deletion. Never indiscriminately save
 entire conversations.
+For a scheduled study debrief, begin by naming the exact assigned source and topic.
+Ask the user to summarize each source separately, then probe definition, mechanism,
+trade-offs, application, and misconceptions. Produce a concise interview-recall
+summary and separate proposed knowledge record for each source. Save only after the
+user confirms it. Retrieve confirmed records by topic when the user wants to refresh
+their understanding before an interview.
 """,
         private=True,
     ),

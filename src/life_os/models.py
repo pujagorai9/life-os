@@ -91,6 +91,7 @@ class TargetType(StrEnum):
 
 
 class TrackingCadence(StrEnum):
+    ONCE = "once"
     DAILY = "daily"
     WEEKLY = "weekly"
     MONTHLY = "monthly"
@@ -181,6 +182,8 @@ class TrackingPrompt(BaseModel):
     response_type: PromptResponseType
     metric_key: str | None = None
     preferred_time: str | None = None
+    due_at: datetime | None = None
+    agent_id: AgentId | None = None
     active: bool = True
 
 
@@ -305,6 +308,28 @@ class PlanningTurn(BaseModel):
 class GoalPlanningFinalize(BaseModel):
     tenant_id: str
     goal: GoalContractCreate
+
+
+class KnowledgeRecordCreate(BaseModel):
+    tenant_id: str
+    goal_id: str | None = None
+    studied_at: datetime = Field(default_factory=utc_now)
+    source_title: str
+    topic: str
+    expected_scope: str
+    user_summary: str
+    probe_questions: list[str] = Field(default_factory=list)
+    probe_answers: list[str] = Field(default_factory=list)
+    interview_recall: str
+    strengths: list[str] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+
+class KnowledgeRecord(KnowledgeRecordCreate):
+    id: str
+    confirmed: bool = False
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class CommitmentStatus(StrEnum):

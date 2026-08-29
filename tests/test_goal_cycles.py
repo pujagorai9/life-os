@@ -27,6 +27,13 @@ def goal_payload() -> dict:
                 "cadence": "daily",
             }
         ],
+        "milestones": [
+            {
+                "title": "Understand the first assigned topic",
+                "success_criteria": "Summarize the source and answer a probe",
+                "due_at": "2030-01-01T20:00:00Z",
+            }
+        ],
         "routines": [
             {
                 "title": "Complete food log",
@@ -124,6 +131,7 @@ def test_goal_approval_creates_editable_tracking_protocol(tmp_path: Path) -> Non
     ).json()
     assert due[0]["agent_id"] == "nutrition_coach"
     assert any("Complete food log" in item["prompt"] for item in due)
+    assert any(item["agent_id"] == "chief_archivist" for item in due)
     delivered = client.patch(
         f"/v1/check-ins/{due[0]['id']}",
         json={"tenant_id": "tenant-a", "status": "delivered"},
@@ -221,3 +229,46 @@ def test_due_review_uses_goal_statistics_and_renews_cycle(tmp_path: Path) -> Non
     assert next_cycle["cycle_number"] == 2
     assert next_cycle["previous_cycle_id"] == draft["id"]
     assert next_cycle["status"] == "draft"
+
+
+def test_archivist_knowledge_records_require_confirmation_and_are_searchable(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_app(tmp_path / "api.db"))
+    proposed = client.post(
+        "/v1/knowledge-records",
+        json={
+            "tenant_id": "tenant-a",
+            "source_title": "AI Engineering",
+            "topic": "Retrieval-augmented generation",
+            "expected_scope": "Retrieval, grounding, and freshness",
+            "user_summary": "RAG retrieves relevant context before generation.",
+            "probe_questions": ["When is retrieval preferable to fine-tuning?"],
+            "probe_answers": ["When knowledge changes or citations matter."],
+            "interview_recall": "Use RAG for fresh, attributable private knowledge.",
+            "strengths": ["Explained freshness"],
+            "gaps": ["Needs stronger retrieval evaluation examples"],
+            "tags": ["rag", "grounding", "interview-prep"],
+        },
+    ).json()
+    hidden = client.get(
+        "/v1/knowledge-records",
+        params={"tenant_id": "tenant-a", "query": "RAG"},
+    ).json()
+    assert hidden == []
+
+    confirmed = client.post(
+        f"/v1/knowledge-records/{proposed['id']}/confirm",
+        params={"tenant_id": "tenant-a"},
+    ).json()
+    assert confirmed["confirmed"] is True
+    found = client.get(
+        "/v1/knowledge-records",
+        params={"tenant_id": "tenant-a", "query": "grounding"},
+    ).json()
+    assert [record["id"] for record in found] == [proposed["id"]]
+    isolated = client.get(
+        "/v1/knowledge-records",
+        params={"tenant_id": "tenant-b", "query": "grounding"},
+    ).json()
+    assert isolated == []

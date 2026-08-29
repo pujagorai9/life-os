@@ -4,6 +4,55 @@ A privacy-first, multi-agent architecture for helping people plan their lives, f
 
 The system is organized like a small company. The user acts as CEO, a Chief of Staff coordinates specialist agents, and independent company-wide functions provide accountability, analytics, and institutional memory.
 
+## Implementation
+
+This repository now includes a working public backend scaffold:
+
+- Eleven configurable agent roles with explicit privacy and action boundaries
+- A deterministic router coordinated by the Chief of Staff
+- OpenAI Responses API support with structured outputs and `store: false`
+- An offline client for setup and tests without an API key
+- Tenant-scoped SQLite storage for commitments, progress events, and confirmed memory
+- Deterministic progress calculations
+- A FastAPI interface
+- A private-profile example and a git-ignored private configuration workflow
+- Tests for routing, tenant isolation, memory confirmation, and analytics
+
+### Quick start
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e '.[dev]'
+cp .env.example .env
+python scripts/bootstrap_private.py
+```
+
+Set `OPENAI_API_KEY` in `.env` for live model responses. Without a key, Life OS
+runs with a safe offline client so its API and deterministic services can still
+be tested.
+
+To use the private profile:
+
+```bash
+export LIFE_OS_PROFILE=private/profile.toml
+life-os serve
+```
+
+Then open `http://127.0.0.1:8000/docs` for the interactive API documentation.
+
+### Public/private boundary
+
+The public repository contains reusable code and generic examples. The complete
+`private/` directory, `.env`, and local databases are ignored by Git. Run this
+before publishing changes:
+
+```bash
+python scripts/check_public_tree.py
+```
+
+Never use `git add -f` on private files.
+
 ## Design principles
 
 1. **Agents represent durable life domains.** Temporary goals—such as finding a job, earning a promotion, completing a project, or preparing for an event—belong inside a stable agent.

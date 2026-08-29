@@ -1,0 +1,36 @@
+enabled_agents = [
+  "chief_of_staff",
+  "career_coach",
+  "knowledge_guru",
+  "briefing_intern",
+  "nutrition_coach",
+  "fitness_coach",
+  "inner_wellbeing_guru",
+  "operations_manager",
+  "chief_accountability_officer",
+  "head_of_performance_analytics",
+  "chief_archivist",
+]
+
+[user]
+display_name = "CEO"
+timezone = "UTC"
+quiet_hours_start = "21:00"
+quiet_hours_end = "07:00"
+
+[privacy]
+share_journal_content = false
+share_health_details_across_domains = false
+allow_external_actions_without_approval = false
+
+[[goals]]
+id = "example-professional-goal"
+domain = "professional"
+title = "Deliver an important professional project"
+status = "active"
+
+[[goals]]
+id = "example-health-goal"
+domain = "fitness"
+title = "Build a sustainable weekly movement routine"
+status = "active"

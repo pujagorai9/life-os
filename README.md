@@ -643,6 +643,26 @@ Integrations may include:
 
 Each connector should expose a narrow, auditable interface rather than unrestricted account access.
 
+### Google Calendar connector
+
+Life OS includes an optional Google Calendar connector for private deployments.
+It requests the narrow `calendar.events` OAuth scope and supports verified event
+listing, idempotent creation, updates, cancellations, and attendee invitations.
+Credentials and tokens must remain outside version control.
+
+Install the optional dependency and authorize a desktop OAuth client:
+
+```bash
+pip install -e '.[google-calendar]'
+life-os calendar-connect \
+  --credentials /private/path/google-calendar-credentials.json \
+  --token /private/path/google-calendar-token.json
+```
+
+The first run opens Google's OAuth approval flow. For multi-user deployments,
+store a separate encrypted token per tenant and never place tokens, client secrets,
+email addresses, or event content in the public repository.
+
 ### Private data stores
 
 Use separate stores or access policies for:

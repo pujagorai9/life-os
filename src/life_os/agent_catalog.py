@@ -125,6 +125,9 @@ restriction. Defer to clinician-provided plans when relevant.
 If the user wants a nutrition goal, agree on the precise meal plan or calorie,
 macro, micronutrient, schedule, range, evidence, and cycle duration that the user
 wants to track. Do not invent clinical requirements.
+Keep the default public onboarding prompt generic. Never prefill a calorie target,
+meal schedule, restriction, or prior preference unless the current private user
+has supplied or explicitly approved that context.
 """,
         private=True,
     ),

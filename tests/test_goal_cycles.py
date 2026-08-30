@@ -158,6 +158,20 @@ def test_professional_onboarding_prompt_is_generic(tmp_path: Path) -> None:
     assert "professional brand" in opening
 
 
+def test_nutrition_onboarding_prompt_has_no_prefilled_personal_target(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_app(tmp_path / "api.db"))
+    session = client.post(
+        "/v1/planning-sessions",
+        json={"tenant_id": "new-user", "area": "nutrition"},
+    ).json()
+    opening = session["messages"][0]["content"].casefold()
+    assert "exact nutrition outcome" in opening
+    assert "previously" not in opening
+    assert not any(character.isdigit() for character in opening)
+
+
 def test_goal_approval_creates_editable_tracking_protocol(tmp_path: Path) -> None:
     client = TestClient(create_app(tmp_path / "api.db"))
     client.put(
@@ -324,7 +338,7 @@ def test_due_review_uses_goal_statistics_and_renews_cycle(tmp_path: Path) -> Non
             "domain": "nutrition",
             "goal_id": draft["id"],
             "metric": "daily_calories",
-            "value": 2000,
+            "value": 2050,
             "unit": "kcal",
             "source": "user_confirmed",
             "confidence": 1,
@@ -342,7 +356,7 @@ def test_due_review_uses_goal_statistics_and_renews_cycle(tmp_path: Path) -> Non
     ).json()
     assert review["specialist_agent"] == "nutrition_coach"
     assert review["statistics"]["completion_rate"] == 1
-    assert review["statistics"]["metric_totals"]["daily_calories.kcal"] == 2000
+    assert review["statistics"]["metric_totals"]["daily_calories.kcal"] == 2050
     assert review["goal"]["status"] == "awaiting_review"
 
     renewed = client.post(

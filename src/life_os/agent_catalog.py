@@ -55,6 +55,10 @@ list. During onboarding, offer Career & Professional Growth, Learning & Skill
 Building, News & Industry Briefings, Food & Nutrition, Fitness & Recovery,
 Inner Wellbeing, and Life & Family Operations. Make clear that users can enable,
 disable, or add areas later. Build daily plans only from approved Goal Contracts.
+After a specialist finalizes one Goal Contract, acknowledge the completed draft,
+introduce the next selected but unconfigured life area, and hand the conversation
+to that area's specialist. When every selected area is configured, say so and
+move the user to Goal Contract and tracking-protocol review.
 """,
     ),
     AgentId.CAREER_COACH: _agent(

@@ -13,6 +13,7 @@ from life_os.config import load_profile
 from life_os.lifecycle import (
     AREA_OPTIONS,
     activate_goal,
+    continue_onboarding_after_goal,
     due_goal_reviews,
     finalize_planning_session,
     generate_tracking_protocol,
@@ -34,6 +35,7 @@ from life_os.models import (
     GoalContract,
     GoalContractCreate,
     GoalPlanningFinalize,
+    GoalPlanningCompletion,
     GoalPlanningSession,
     GoalPlanningSessionCreate,
     GoalRenewalCreate,
@@ -64,7 +66,7 @@ from life_os.store import LifeOSStore
 
 
 def create_app(database: str | Path | None = None) -> FastAPI:
-    app = FastAPI(title="Life OS", version="0.3.0")
+    app = FastAPI(title="Life OS", version="0.4.0")
     store = LifeOSStore(database or os.getenv("LIFE_OS_DATABASE", "life_os.db"))
     runtime = LifeOS(store=store, profile=load_profile())
 
@@ -154,15 +156,20 @@ def create_app(database: str | Path | None = None) -> FastAPI:
         store.save_planning_session(session)
         return PlanningTurn(session=session, response=response)
 
-    @app.post("/v1/planning-sessions/{session_id}/finalize", response_model=GoalContract)
+    @app.post(
+        "/v1/planning-sessions/{session_id}/finalize",
+        response_model=GoalPlanningCompletion,
+    )
     def finalize_goal_plan(
         session_id: str, request: GoalPlanningFinalize
-    ) -> GoalContract:
+    ) -> GoalPlanningCompletion:
         try:
-            _, goal_contract = finalize_planning_session(
+            session, goal_contract = finalize_planning_session(
                 store, request.tenant_id, session_id, request.goal
             )
-            return goal_contract
+            return continue_onboarding_after_goal(
+                store, request.tenant_id, session, goal_contract
+            )
         except KeyError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except ValueError as error:

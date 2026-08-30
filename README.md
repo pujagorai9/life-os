@@ -402,6 +402,13 @@ specialist can incorporate earlier answers and feedback. Finalizing a session
 creates a draft contract—not an active goal. The user must still inspect and
 approve that contract separately.
 
+After one specialist finalizes a draft, control returns automatically to the
+Chief of Staff. The Chief of Staff acknowledges the configured area, introduces
+the next selected area that does not yet have a finalized draft, and opens that
+specialist's planning session. This repeats until every selected area is
+configured. An existing unfinished session is resumed instead of duplicated.
+The user may pause onboarding or revisit any specialist at any time.
+
 Nutrition goals, for example, must contain the exact user-approved meal plan or
 calorie, macro, micronutrient, schedule, or range being tracked. The Nutrition
 Coach does not invent clinical requirements and defers to clinician-provided plans.
@@ -480,6 +487,8 @@ the contract version rather than rewriting the past.
 Select life areas
         ↓
 Specialist negotiates an exact draft goal
+        ↓
+Chief of Staff introduces the next selected specialist; repeat until configured
         ↓
 User approves a time-bounded Goal Contract
         ↓

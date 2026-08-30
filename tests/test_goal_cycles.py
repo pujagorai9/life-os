@@ -100,13 +100,49 @@ def test_specialist_planning_session_preserves_discussion_and_finalizes_draft(
         json={"tenant_id": "tenant-a", "goal": goal_payload()},
     )
     assert finalized.status_code == 200
-    assert finalized.json()["status"] == "draft"
+    completion = finalized.json()
+    assert completion["goal"]["status"] == "draft"
+    assert completion["onboarding_complete"] is True
+    assert completion["next_session"] is None
+    assert completion["chief_of_staff_message"].startswith("Chief of Staff:")
     saved_session = client.get(
         f"/v1/planning-sessions/{session['id']}",
         params={"tenant_id": "tenant-a"},
     ).json()
     assert saved_session["status"] == "finalized"
-    assert saved_session["goal_id"] == finalized.json()["id"]
+    assert saved_session["goal_id"] == completion["goal"]["id"]
+
+
+def test_finalizing_one_area_returns_to_chief_of_staff_and_opens_next(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_app(tmp_path / "api.db"))
+    client.put(
+        "/v1/onboarding/selection",
+        json={
+            "tenant_id": "tenant-a",
+            "selected_areas": ["nutrition", "briefing", "fitness"],
+        },
+    )
+    nutrition = client.post(
+        "/v1/planning-sessions",
+        json={"tenant_id": "tenant-a", "area": "nutrition"},
+    ).json()
+
+    completion = client.post(
+        f"/v1/planning-sessions/{nutrition['id']}/finalize",
+        json={"tenant_id": "tenant-a", "goal": goal_payload()},
+    ).json()
+
+    assert completion["onboarding_complete"] is False
+    assert completion["remaining_areas"] == ["briefing", "fitness"]
+    assert completion["chief_of_staff_message"].startswith("Chief of Staff:")
+    assert "News & Industry Briefings" in completion["chief_of_staff_message"]
+    assert completion["next_session"]["area"] == "briefing"
+    assert completion["next_session"]["agent_id"] == "briefing_intern"
+    messages = completion["next_session"]["messages"]
+    assert messages[0]["content"] == completion["chief_of_staff_message"]
+    assert "topics, sources" in messages[1]["content"]
 
 
 def test_professional_onboarding_prompt_is_generic(tmp_path: Path) -> None:

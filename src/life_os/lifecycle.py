@@ -12,6 +12,7 @@ from life_os.models import (
     GoalContractCreate,
     GoalCycleStats,
     GoalReviewPacket,
+    GoalPlanningCompletion,
     GoalPlanningSession,
     GoalStatus,
     LifeArea,
@@ -134,6 +135,82 @@ def finalize_planning_session(
     session.updated_at = utc_now()
     store.save_planning_session(session)
     return session, goal
+
+
+def continue_onboarding_after_goal(
+    store: LifeOSStore,
+    tenant_id: str,
+    completed_session: GoalPlanningSession,
+    goal: GoalContract,
+) -> GoalPlanningCompletion:
+    """Return control to the Chief of Staff and open the next selected area."""
+    selection = store.get_onboarding_selection(tenant_id)
+    if selection is None:
+        return GoalPlanningCompletion(
+            goal=goal,
+            completed_session=completed_session,
+            chief_of_staff_message=(
+                "Chief of Staff: This goal has been saved as a draft and is ready for "
+                "your review. Choose another life area whenever you are ready to continue."
+            ),
+            onboarding_complete=True,
+        )
+
+    sessions = store.list_planning_sessions(tenant_id)
+    configured_areas = {
+        session.area
+        for session in sessions
+        if session.status == PlanningSessionStatus.FINALIZED
+    }
+    remaining_areas = [
+        area for area in selection.selected_areas if area not in configured_areas
+    ]
+    if not remaining_areas:
+        return GoalPlanningCompletion(
+            goal=goal,
+            completed_session=completed_session,
+            chief_of_staff_message=(
+                "Chief of Staff: This goal has been saved as a draft. Every selected "
+                "life area now has a configured goal. Next, review and approve each "
+                "Goal Contract and its tracking protocol."
+            ),
+            onboarding_complete=True,
+        )
+
+    next_area = remaining_areas[0]
+    next_session = next(
+        (
+            session
+            for session in sessions
+            if session.area == next_area
+            and session.status != PlanningSessionStatus.FINALIZED
+        ),
+        None,
+    )
+    if next_session is None:
+        next_session = start_planning_session(store, tenant_id, next_area)
+
+    next_option = next(option for option in AREA_OPTIONS if option.id == next_area)
+    handoff = (
+        f"Chief of Staff: Your {completed_session.area.value} goal has been saved as "
+        f"a draft. Next, let's configure {next_option.title} with its specialist."
+    )
+    if not next_session.messages or next_session.messages[0].content != handoff:
+        next_session.messages.insert(
+            0,
+            PlanningMessage(role=ConversationRole.ASSISTANT, content=handoff),
+        )
+        next_session.updated_at = utc_now()
+        store.save_planning_session(next_session)
+
+    return GoalPlanningCompletion(
+        goal=goal,
+        completed_session=completed_session,
+        chief_of_staff_message=handoff,
+        next_session=next_session,
+        remaining_areas=remaining_areas,
+        onboarding_complete=False,
+    )
 
 
 def validate_goal_contract(goal: GoalContract) -> None:

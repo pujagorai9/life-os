@@ -317,6 +317,15 @@ class GoalPlanningFinalize(BaseModel):
     goal: GoalContractCreate
 
 
+class GoalPlanningCompletion(BaseModel):
+    goal: GoalContract
+    completed_session: GoalPlanningSession
+    chief_of_staff_message: str
+    next_session: GoalPlanningSession | None = None
+    remaining_areas: list[LifeArea] = Field(default_factory=list)
+    onboarding_complete: bool = False
+
+
 class KnowledgeRecordCreate(BaseModel):
     tenant_id: str
     goal_id: str | None = None

@@ -100,6 +100,11 @@ class TrackingCadence(StrEnum):
     END_OF_CYCLE = "end_of_cycle"
 
 
+class MilestoneKind(StrEnum):
+    USER_COMMITMENT = "user_commitment"
+    AGENT_DELIVERY = "agent_delivery"
+
+
 class GoalMetric(BaseModel):
     key: str
     label: str
@@ -115,6 +120,7 @@ class GoalMilestone(BaseModel):
     title: str
     success_criteria: str
     due_at: datetime
+    kind: MilestoneKind = MilestoneKind.USER_COMMITMENT
     capture_knowledge: bool = False
 
 

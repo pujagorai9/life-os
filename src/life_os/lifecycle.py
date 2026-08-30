@@ -16,6 +16,7 @@ from life_os.models import (
     GoalStatus,
     LifeArea,
     LifeAreaOption,
+    MilestoneKind,
     PlanningMessage,
     ConversationRole,
     PlanningSessionStatus,
@@ -165,6 +166,14 @@ def generate_tracking_protocol(goal: GoalContract) -> TrackingProtocol:
                 "confirmation."
             )
             milestone_agent = AgentId.CHIEF_ARCHIVIST
+        elif milestone.kind == MilestoneKind.AGENT_DELIVERY:
+            milestone_prompt = (
+                f"Prepare and deliver: {milestone.title}. "
+                f"Delivery requirements: {milestone.success_criteria} Do not ask the "
+                "user to report whether they completed this delivery. After delivering "
+                "it, ask only for concise usefulness, relevance, or correction feedback."
+            )
+            milestone_agent = goal.owner_agent
         else:
             archive_handoff = (
                 " This work may produce durable, reusable knowledge. If it did, "

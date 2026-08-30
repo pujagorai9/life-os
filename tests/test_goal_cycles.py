@@ -217,6 +217,26 @@ def test_non_learning_milestone_can_offer_archivist_handoff(tmp_path: Path) -> N
     assert "save it only after the user confirms" in milestone_prompt["prompt"]
 
 
+def test_agent_delivery_milestone_prompts_the_owning_agent(tmp_path: Path) -> None:
+    client = TestClient(create_app(tmp_path / "api.db"))
+    payload = goal_payload()
+    payload["domain"] = "briefing"
+    payload["owner_agent"] = "briefing_intern"
+    payload["milestones"][0]["kind"] = "agent_delivery"
+    draft = client.post("/v1/goals", json=payload).json()
+    activation = client.post(
+        f"/v1/goals/{draft['id']}/approve", params={"tenant_id": "tenant-a"}
+    ).json()
+    milestone_prompt = next(
+        prompt
+        for prompt in activation["proposed_tracking_protocol"]["prompts"]
+        if prompt["cadence"] == "once"
+    )
+    assert milestone_prompt["agent_id"] == "briefing_intern"
+    assert milestone_prompt["prompt"].startswith("Prepare and deliver")
+    assert "Do not ask the user to report" in milestone_prompt["prompt"]
+
+
 def test_goal_amendments_are_versioned(tmp_path: Path) -> None:
     client = TestClient(create_app(tmp_path / "api.db"))
     draft = client.post("/v1/goals", json=goal_payload()).json()

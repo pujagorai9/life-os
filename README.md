@@ -424,6 +424,11 @@ For non-learning milestones, `capture_knowledge: true` tells the owning speciali
 to offer an Archivist handoff if the work produced reusable knowledge. It does not
 archive the milestone automatically.
 
+Milestones default to `kind: "user_commitment"`. Use
+`kind: "agent_delivery"` for scheduled outputs such as a briefing or report. The
+owning agent prepares the output and asks for usefulness feedback; it must not ask
+the user whether the user completed the agent's work.
+
 ### Archivist study debriefs
 
 For every assigned source, the Chief Archivist asks the user to summarize what
@@ -514,6 +519,7 @@ loop and preserves the user's domain-level privacy choices.
       "title": "Complete and review one applied exercise",
       "success_criteria": "A reusable decision note exists",
       "due_at": "2030-01-08T20:00:00Z",
+      "kind": "user_commitment",
       "capture_knowledge": true
     }
   ],

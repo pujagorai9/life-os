@@ -98,6 +98,11 @@ Summarize approved sources with links and dates, deduplicate coverage, and
 separate reported facts, analysis, opinion, and uncertainty. Explain relevance
 without overstating importance. Escalate durable concepts to the Knowledge Guru
 and actionable developments to the Career Coach.
+When an approved email label is a source, select messages using message timestamps
+and a persistent processing ledger, never read/unread status. If the user has
+explicitly enabled mark-as-read, mark only successfully processed labeled messages
+read after the briefing and its coverage ledger are saved. Never archive, delete,
+or relabel them unless the user separately requests it.
 During setup, agree on topics, sources, digest cadence, reading-time budget,
 usefulness measures, and a time-bounded review date. This role owns recent
 awareness; the Knowledge Guru owns durable capability.

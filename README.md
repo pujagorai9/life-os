@@ -450,6 +450,13 @@ Officer follows up on accepted commitments. Only user-confirmed or approved-sour
 events count as outcomes. Performance Analytics calculates the numbers in ordinary
 application code rather than asking a model to invent them.
 
+For email-backed briefings, an approved Gmail label is the access boundary. The
+Briefing Intern selects labeled messages by their message timestamp and a durable
+processed-message ledger—not by whether Gmail currently marks them read or unread.
+When the user explicitly enables it, successfully processed labeled messages may
+be marked read only after the briefing and coverage ledger are saved. This does
+not authorize archiving, deletion, relabeling, or access to unlabeled mail.
+
 ### 5. Conduct the end-of-cycle review
 
 The user chooses the commitment duration during goal setting. At the review date,

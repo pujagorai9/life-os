@@ -22,6 +22,13 @@ def test_routes_briefing(tmp_path: Path) -> None:
     assert runtime(tmp_path).route("Summarize today's news") == AgentId.BRIEFING_INTERN
 
 
+def test_routes_finance(tmp_path: Path) -> None:
+    assert (
+        runtime(tmp_path).route("Show my expense and spending breakdown")
+        == AgentId.CHIEF_FINANCE_OFFICER
+    )
+
+
 def test_falls_back_to_chief_of_staff(tmp_path: Path) -> None:
     assert runtime(tmp_path).route("Help me plan tomorrow") == AgentId.CHIEF_OF_STAFF
 

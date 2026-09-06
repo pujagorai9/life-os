@@ -4,7 +4,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .coverage
+.DS_Store
 htmlcov/
 *.db
 *.sqlite3
+*_attachments/
 private/

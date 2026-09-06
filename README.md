@@ -90,6 +90,25 @@ loopback-only interface behind a private device network or authenticated reverse
 proxy. Do not bind the API directly to a public interface. Once opened on a phone,
 the web app can be added to the Home Screen.
 
+### Private cloud deployment
+
+The repository includes a production container for the FastAPI service and a
+Railway configuration. The first cloud stage deliberately retains SQLite on a
+single persistent volume so existing private history can be migrated without a
+data-model rewrite.
+
+Mount a persistent volume at `/data`, then configure the values documented in
+`config/cloud.env.example` through the hosting provider's encrypted environment.
+Use the same randomly generated `LIFE_OS_API_TOKEN` in the backend and in the
+mobile Site runtime; the browser never receives this value because the
+same-origin server proxy adds it to backend requests.
+
+The container image excludes `private/`, databases, credentials, tokens, and
+attachments. Copy private data to the mounted volume through an authenticated
+administrative channel rather than adding it to the source repository or image.
+Keep the local/Tailscale deployment available until the cloud database, files,
+OAuth callbacks, and scheduled jobs have all passed end-to-end verification.
+
 ### Public/private boundary
 
 The public repository contains reusable code and generic examples. The complete
@@ -484,6 +503,7 @@ Responsibilities:
 
 - Store confirmed goals, preferences, constraints, relationships, and routines
 - Extract proposed context from user-provided text, documents, or images
+- Detect useful patterns across confirmed notes, answers, decisions, and outcomes
 - Accept direct requests from the user and handoffs from every specialist
 - Ask users to confirm durable memory before saving it
 - Record the source, confidence, creation date, and optional expiration date
@@ -494,11 +514,14 @@ Responsibilities:
 
 The Chief Archivist should store concise structured facts rather than indiscriminately retaining entire conversations.
 
-The Archivist is a horizontal company service, not a department owned by the
-Knowledge Guru. Learning sessions trigger a debrief by default. Any other
-specialist may offer an Archivist handoff when work produces a reusable insight,
-decision, preference, explanation, or artifact. Routine completion data remains
-with Operations and the Progress Tracker. Every handoff follows
+The Archivist is a background horizontal company service, not a department owned
+by the Knowledge Guru and not the owner of recurring study or interview cards.
+The Knowledge Guru owns visible reading and note-writing tasks; the Career Coach
+owns visible interview practice, submitted answers, mocks, and professional
+portfolio work. Any specialist may offer an Archivist handoff when confirmed work
+produces a reusable insight, decision, preference, explanation, artifact, or
+recurring pattern. Routine completion data remains with Operations and the
+Progress Tracker. Every handoff follows
 **propose → preview → confirm → save**, and the user may invoke the Archivist
 directly at any time.
 
@@ -577,8 +600,11 @@ the scheduled check-ins. Replacing an approved protocol replaces only pending
 future check-ins; already delivered history remains intact.
 
 Milestones create one-time prompts containing the expected work and due date. A
-study milestone can be assigned to the Chief Archivist, which begins the debrief
-by naming the scheduled source and topic rather than asking a context-free question.
+large milestone should be split into independently completable cards—for example,
+complete the assigned reading, submit one-page notes, practice one interview
+question, and improve the interview tool. Study and note cards belong to the
+Knowledge Guru. Interview answers and professional-project cards belong to the
+Career Coach.
 For non-learning milestones, `capture_knowledge: true` tells the owning specialist
 to offer an Archivist handoff if the work produced reusable knowledge. It does not
 archive the milestone automatically.
@@ -602,18 +628,19 @@ confirmed progress events and approved sources; it does not create end-of-cycle
 "What was your…" questions that ask the user to reconstruct data the system should
 already know.
 
-### Archivist study debriefs
+### Background memory and recall
 
-For every assigned source, the Chief Archivist asks the user to summarize what
-they learned and then probes definition, mechanism, trade-offs, application, and
-possible misconceptions. Different books or sources receive separate debriefs and
-separate records.
+The Chief Archivist watches confirmed notes, practiced answers, reflections, and
+outcomes for reusable knowledge and recurring patterns. It does not interrupt
+every completed task with another mandatory debrief. When a durable record would
+be useful, it previews the proposed memory and saves it only after confirmation.
 
 A proposed knowledge record contains the source, topic, expected scope, the user's
-summary, probe questions and answers, strengths, gaps, tags, and a concise
-interview-recall explanation. It is excluded from search until the user confirms
-it. Confirmed records are tenant-isolated and searchable by topic or source so a
-user can refresh their own understanding before a later interview or assessment.
+summary or answer, observed strengths or gaps, tags, and a concise recall
+explanation. It is excluded from search until the user confirms it. Confirmed
+records are tenant-isolated and searchable by topic, source, date, goal, or project
+so a user can revisit their own understanding before a later interview, decision,
+or assessment.
 
 ### 4. Plan, track, and verify
 

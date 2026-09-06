@@ -74,6 +74,12 @@ AREA_OPTIONS: tuple[LifeAreaOption, ...] = (
         description="Relationships, caregiving, pets, household routines, travel, and appointments.",
         agent_id=AgentId.OPERATIONS_MANAGER,
     ),
+    LifeAreaOption(
+        id=LifeArea.FINANCE,
+        title="Money & Financial Goals",
+        description="Spending, saving, budgeting, and time-bounded financial outcomes.",
+        agent_id=AgentId.CHIEF_FINANCE_OFFICER,
+    ),
 )
 
 AREA_OWNER = {option.id: option.agent_id for option in AREA_OPTIONS}
@@ -91,6 +97,7 @@ INITIAL_GOAL_QUESTIONS: dict[LifeArea, str] = {
     LifeArea.FITNESS: "What exact fitness, movement, sleep, or recovery result would you like to achieve?",
     LifeArea.WELLBEING: "What inner wellbeing practice or result would you like to support?",
     LifeArea.OPERATIONS: "What life or family responsibility would you like to coordinate reliably?",
+    LifeArea.FINANCE: "What exact financial outcome would you like to understand or achieve?",
 }
 
 
@@ -275,31 +282,40 @@ def generate_tracking_protocol(goal: GoalContract) -> TrackingProtocol:
                 response_type=PromptResponseType.REFLECTION,
                 due_at=milestone.due_at,
                 agent_id=milestone_agent,
+                kind=milestone.kind,
             )
         )
     for routine in goal.routines:
+        if routine.kind == MilestoneKind.AGENT_DELIVERY:
+            routine_prompt = (
+                f"Prepare and deliver: {routine.title}. "
+                f"Delivery requirements: {routine.minimum_success} Do not ask the "
+                "user to complete or confirm the agent's work. Report the result, "
+                "any action taken, and any exception that needs user attention."
+            )
+            routine_agent = goal.owner_agent
+            response_type = PromptResponseType.TEXT
+        else:
+            routine_prompt = (
+                f"Did you complete '{routine.title}'? "
+                f"Minimum success: {routine.minimum_success}"
+            )
+            routine_agent = None
+            response_type = PromptResponseType.BOOLEAN
         prompts.append(
             TrackingPrompt(
                 id=str(uuid.uuid4()),
                 cadence=routine.cadence,
-                prompt=(
-                    f"Did you complete '{routine.title}'? "
-                    f"Minimum success: {routine.minimum_success}"
-                ),
-                response_type=PromptResponseType.BOOLEAN,
+                prompt=routine_prompt,
+                response_type=response_type,
                 preferred_time=routine.preferred_time,
+                agent_id=routine_agent,
+                kind=routine.kind,
             )
         )
-    for metric in goal.metrics:
-        prompts.append(
-            TrackingPrompt(
-                id=str(uuid.uuid4()),
-                cadence=metric.cadence,
-                prompt=f"What was your {metric.label.lower()} in {metric.unit}?",
-                response_type=PromptResponseType.NUMBER,
-                metric_key=metric.key,
-            )
-        )
+    # Metrics define how the Progress Tracker evaluates the goal. They are not
+    # user tasks and therefore do not become scheduled check-ins. Their values
+    # are calculated from confirmed progress events at report and review time.
     prompts.append(
         TrackingPrompt(
             id=str(uuid.uuid4()),
@@ -404,6 +420,8 @@ def schedule_protocol(goal: GoalContract, protocol: TrackingProtocol) -> list[Sc
                 agent_id=prompt.agent_id or goal.owner_agent,
                 prompt=prompt.prompt,
                 due_at=due_at,
+                kind=prompt.kind,
+                input_required=prompt.input_required,
             )
             for due_at in occurrences
         )

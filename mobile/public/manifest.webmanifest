@@ -1,0 +1,17 @@
+{
+  "name": "Life OS",
+  "short_name": "Life OS",
+  "description": "Your private team for planning, accountability, and progress.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f4ed",
+  "theme_color": "#356c4d",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

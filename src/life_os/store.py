@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import uuid
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from life_os.models import (
@@ -12,6 +13,15 @@ from life_os.models import (
     CommitmentCreate,
     CommitmentStatus,
     CheckInStatus,
+    CheckInOutcome,
+    CheckInPhoto,
+    ExpenseRecord,
+    FinanceCategoryTotal,
+    FinanceCurrencySummary,
+    FinanceDailyReport,
+    FinanceEmailResultCreate,
+    PhotoAnalysis,
+    PhotoAnalysisStatus,
     GoalAmendment,
     GoalAmendmentCreate,
     GoalContract,
@@ -152,6 +162,16 @@ class LifeOSStore:
                 CREATE INDEX IF NOT EXISTS idx_check_ins_due
                     ON scheduled_check_ins (tenant_id, status, due_at);
 
+                CREATE TABLE IF NOT EXISTS check_in_photos (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    check_in_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_check_in_photos
+                    ON check_in_photos (tenant_id, check_in_id, created_at);
+
                 CREATE TABLE IF NOT EXISTS goal_planning_sessions (
                     id TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL,
@@ -177,8 +197,184 @@ class LifeOSStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_knowledge_records
                     ON knowledge_records (tenant_id, confirmed, studied_at);
+
+                CREATE TABLE IF NOT EXISTS finance_email_results (
+                    tenant_id TEXT NOT NULL,
+                    source_message_id TEXT NOT NULL,
+                    message_at TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    processed_at TEXT NOT NULL,
+                    PRIMARY KEY (tenant_id, source_message_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_finance_email_results_time
+                    ON finance_email_results (tenant_id, message_at);
+
+                CREATE TABLE IF NOT EXISTS expense_records (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    source_message_id TEXT NOT NULL,
+                    transaction_at TEXT NOT NULL,
+                    currency TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    amount REAL NOT NULL,
+                    kind TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_source_message
+                    ON expense_records (tenant_id, source_message_id);
+                CREATE INDEX IF NOT EXISTS idx_expense_records_time
+                    ON expense_records (tenant_id, transaction_at);
                 """
             )
+
+    def save_finance_email_result(
+        self, request: FinanceEmailResultCreate
+    ) -> ExpenseRecord | None:
+        processed_at = utc_now()
+        expense: ExpenseRecord | None = None
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO finance_email_results
+                   (tenant_id, source_message_id, message_at, outcome, payload, processed_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(tenant_id, source_message_id) DO UPDATE SET
+                     message_at = excluded.message_at,
+                     outcome = excluded.outcome,
+                     payload = excluded.payload,
+                     processed_at = excluded.processed_at""",
+                (
+                    request.tenant_id,
+                    request.source_message_id,
+                    _iso(request.message_at),
+                    request.outcome,
+                    _json(request),
+                    _iso(processed_at),
+                ),
+            )
+            if request.outcome not in {"purchase", "refund"}:
+                connection.execute(
+                    """DELETE FROM expense_records
+                       WHERE tenant_id = ? AND source_message_id = ?""",
+                    (request.tenant_id, request.source_message_id),
+                )
+                return None
+
+            prior = connection.execute(
+                """SELECT id, created_at FROM expense_records
+                   WHERE tenant_id = ? AND source_message_id = ?""",
+                (request.tenant_id, request.source_message_id),
+            ).fetchone()
+            expense = ExpenseRecord(
+                id=prior["id"] if prior else str(uuid.uuid4()),
+                tenant_id=request.tenant_id,
+                source_message_id=request.source_message_id,
+                source_account_id=request.source_account_id,
+                source_account_email=request.source_account_email,
+                household_member=request.household_member,
+                transaction_at=request.transaction_at,
+                merchant=request.merchant.strip(),
+                category=request.category.strip().lower().replace(" ", "_"),
+                amount=request.amount,
+                currency=request.currency.strip().upper(),
+                kind=request.outcome,
+                confidence=request.confidence,
+                created_at=(
+                    datetime.fromisoformat(prior["created_at"])
+                    if prior
+                    else processed_at
+                ),
+            )
+            connection.execute(
+                """INSERT INTO expense_records
+                   (id, tenant_id, source_message_id, transaction_at, currency,
+                    category, amount, kind, payload, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(tenant_id, source_message_id) DO UPDATE SET
+                     transaction_at = excluded.transaction_at,
+                     currency = excluded.currency,
+                     category = excluded.category,
+                     amount = excluded.amount,
+                     kind = excluded.kind,
+                     payload = excluded.payload""",
+                (
+                    expense.id,
+                    expense.tenant_id,
+                    expense.source_message_id,
+                    _iso(expense.transaction_at),
+                    expense.currency,
+                    expense.category,
+                    expense.amount,
+                    expense.kind,
+                    _json(expense),
+                    _iso(expense.created_at),
+                ),
+            )
+        return expense
+
+    def finance_daily_report(
+        self, tenant_id: str, day: date, timezone
+    ) -> FinanceDailyReport:
+        with self._connect() as connection:
+            expense_rows = connection.execute(
+                """SELECT payload FROM expense_records
+                   WHERE tenant_id = ? ORDER BY transaction_at""",
+                (tenant_id,),
+            ).fetchall()
+            email_rows = connection.execute(
+                """SELECT message_at FROM finance_email_results
+                   WHERE tenant_id = ?""",
+                (tenant_id,),
+            ).fetchall()
+        expenses = [
+            ExpenseRecord.model_validate_json(row["payload"])
+            for row in expense_rows
+            if datetime.fromisoformat(
+                json.loads(row["payload"])["transaction_at"]
+            ).astimezone(timezone).date()
+            == day
+        ]
+        processed_count = sum(
+            datetime.fromisoformat(row["message_at"]).astimezone(timezone).date()
+            == day
+            for row in email_rows
+        )
+        grouped: dict[str, dict[str, object]] = {}
+        for expense in expenses:
+            bucket = grouped.setdefault(
+                expense.currency,
+                {"spent": 0.0, "refunded": 0.0, "categories": {}},
+            )
+            amount_key = "refunded" if expense.kind == "refund" else "spent"
+            bucket[amount_key] = float(bucket[amount_key]) + expense.amount
+            signed = -expense.amount if expense.kind == "refund" else expense.amount
+            categories = bucket["categories"]
+            categories[expense.category] = categories.get(expense.category, 0.0) + signed
+        summaries = [
+            FinanceCurrencySummary(
+                currency=currency,
+                total_spent=round(float(values["spent"]), 2),
+                total_refunded=round(float(values["refunded"]), 2),
+                net_spent=round(
+                    float(values["spent"]) - float(values["refunded"]), 2
+                ),
+                categories=[
+                    FinanceCategoryTotal(category=category, amount=round(amount, 2))
+                    for category, amount in sorted(
+                        values["categories"].items(), key=lambda item: -item[1]
+                    )
+                ],
+            )
+            for currency, values in sorted(grouped.items())
+        ]
+        return FinanceDailyReport(
+            day=day,
+            purchase_count=sum(expense.kind == "purchase" for expense in expenses),
+            processed_email_count=processed_count,
+            summaries=summaries,
+            transactions=expenses,
+        )
 
     def propose_knowledge_record(self, request: KnowledgeRecordCreate) -> KnowledgeRecord:
         record = KnowledgeRecord(id=str(uuid.uuid4()), **request.model_dump())
@@ -573,14 +769,137 @@ class LifeOSStore:
         with self._connect() as connection:
             rows = connection.execute(
                 """SELECT payload FROM scheduled_check_ins
-                   WHERE tenant_id = ? AND status = ? AND due_at <= ?
-                   ORDER BY due_at LIMIT ?""",
-                (tenant_id, CheckInStatus.PENDING, _iso(as_of), limit),
+                   WHERE tenant_id = ? AND status = ?""",
+                (tenant_id, CheckInStatus.PENDING),
             ).fetchall()
-        return [ScheduledCheckIn.model_validate_json(row["payload"]) for row in rows]
+        check_ins = [
+            ScheduledCheckIn.model_validate_json(row["payload"]) for row in rows
+        ]
+        return sorted(
+            (item for item in check_ins if item.due_at <= as_of),
+            key=lambda item: item.due_at,
+        )[:limit]
+
+    def list_check_ins(
+        self,
+        tenant_id: str,
+        start_at: datetime,
+        end_at: datetime,
+        limit: int = 500,
+    ) -> list[ScheduledCheckIn]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT payload FROM scheduled_check_ins
+                   WHERE tenant_id = ?""",
+                (tenant_id,),
+            ).fetchall()
+        check_ins = [
+            ScheduledCheckIn.model_validate_json(row["payload"]) for row in rows
+        ]
+        return sorted(
+            (item for item in check_ins if start_at <= item.due_at <= end_at),
+            key=lambda item: item.due_at,
+        )[:limit]
+
+    def get_check_in(self, tenant_id: str, check_in_id: str) -> ScheduledCheckIn:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT payload FROM scheduled_check_ins
+                   WHERE tenant_id = ? AND id = ?""",
+                (tenant_id, check_in_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError("Check-in not found")
+        return ScheduledCheckIn.model_validate_json(row["payload"])
+
+    def save_check_in_photo(
+        self, photo: CheckInPhoto, image: bytes, extension: str
+    ) -> CheckInPhoto:
+        database_path = Path(self.path).resolve()
+        attachment_root = database_path.parent / f"{database_path.stem}_attachments"
+        tenant_directory = attachment_root / photo.storage_key.split("/", 1)[0]
+        tenant_directory.mkdir(parents=True, exist_ok=True)
+        os.chmod(attachment_root, 0o700)
+        os.chmod(tenant_directory, 0o700)
+        target = attachment_root / photo.storage_key
+        if target.suffix != f".{extension}" or target.parent != tenant_directory:
+            raise ValueError("Invalid photo storage key")
+        try:
+            target.write_bytes(image)
+            os.chmod(target, 0o600)
+            with self._connect() as connection:
+                connection.execute(
+                    """INSERT INTO check_in_photos
+                       (id, tenant_id, check_in_id, payload, created_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (
+                        photo.id,
+                        photo.tenant_id,
+                        photo.check_in_id,
+                        _json(photo),
+                        _iso(photo.created_at),
+                    ),
+                )
+        except Exception:
+            target.unlink(missing_ok=True)
+            raise
+        return photo
+
+    def list_check_in_photos(
+        self, tenant_id: str, check_in_id: str
+    ) -> list[CheckInPhoto]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT payload FROM check_in_photos
+                   WHERE tenant_id = ? AND check_in_id = ? ORDER BY created_at""",
+                (tenant_id, check_in_id),
+            ).fetchall()
+        return [CheckInPhoto.model_validate_json(row["payload"]) for row in rows]
+
+    def get_check_in_photo(
+        self, tenant_id: str, check_in_id: str, photo_id: str
+    ) -> CheckInPhoto:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT payload FROM check_in_photos
+                   WHERE tenant_id = ? AND check_in_id = ? AND id = ?""",
+                (tenant_id, check_in_id, photo_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError("Check-in photo not found")
+        return CheckInPhoto.model_validate_json(row["payload"])
+
+    def read_check_in_photo(self, photo: CheckInPhoto) -> bytes:
+        database_path = Path(self.path).resolve()
+        attachment_root = (
+            database_path.parent / f"{database_path.stem}_attachments"
+        ).resolve()
+        target = (attachment_root / photo.storage_key).resolve()
+        if not target.is_relative_to(attachment_root):
+            raise ValueError("Invalid photo storage key")
+        return target.read_bytes()
+
+    def update_check_in_photo_analysis(
+        self, photo: CheckInPhoto, analysis: PhotoAnalysis
+    ) -> CheckInPhoto:
+        photo.analysis = analysis
+        photo.analysis_status = PhotoAnalysisStatus.COMPLETED
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """UPDATE check_in_photos SET payload = ?
+                   WHERE tenant_id = ? AND check_in_id = ? AND id = ?""",
+                (_json(photo), photo.tenant_id, photo.check_in_id, photo.id),
+            )
+        if cursor.rowcount != 1:
+            raise KeyError("Check-in photo not found")
+        return photo
 
     def update_check_in_status(
-        self, tenant_id: str, check_in_id: str, status: CheckInStatus
+        self,
+        tenant_id: str,
+        check_in_id: str,
+        status: CheckInStatus,
+        outcome: CheckInOutcome | None = None,
     ) -> ScheduledCheckIn:
         with self._connect() as connection:
             row = connection.execute(
@@ -592,6 +911,11 @@ class LifeOSStore:
                 raise KeyError("Check-in not found")
             item = ScheduledCheckIn.model_validate_json(row["payload"])
             item.status = status
+            item.status_updated_at = utc_now()
+            item.outcome = outcome if status == CheckInStatus.RESPONDED else None
+            item.completed_at = (
+                item.status_updated_at if status == CheckInStatus.RESPONDED else None
+            )
             connection.execute(
                 """UPDATE scheduled_check_ins SET status = ?, payload = ?
                    WHERE tenant_id = ? AND id = ?""",
@@ -674,6 +998,62 @@ class LifeOSStore:
                 ),
             )
         return event
+
+    def upsert_event_by_source_key(
+        self, request: ProgressEventCreate, source_key: str
+    ) -> tuple[ProgressEvent, str]:
+        """Create or update one provider-owned event without duplicating imports."""
+        metadata = {**request.metadata, "source_key": source_key}
+        request = request.model_copy(update={"metadata": metadata})
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT * FROM progress_events
+                   WHERE tenant_id = ? AND source = ? AND metric = ?
+                     AND json_extract(metadata, '$.source_key') = ?
+                   LIMIT 1""",
+                (request.tenant_id, request.source, request.metric, source_key),
+            ).fetchone()
+            if row is None:
+                event = ProgressEvent(id=str(uuid.uuid4()), **request.model_dump())
+                connection.execute(
+                    """INSERT INTO progress_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        event.id,
+                        event.tenant_id,
+                        event.domain,
+                        event.metric,
+                        event.value,
+                        event.unit,
+                        event.source,
+                        event.confidence,
+                        _iso(event.occurred_at),
+                        event.goal_id,
+                        json.dumps(event.metadata),
+                    ),
+                )
+                return event, "created"
+
+            current = _event(row)
+            if current.model_dump() == ProgressEvent(id=current.id, **request.model_dump()).model_dump():
+                return current, "unchanged"
+            event = ProgressEvent(id=current.id, **request.model_dump())
+            connection.execute(
+                """UPDATE progress_events
+                   SET domain = ?, value = ?, unit = ?, confidence = ?, occurred_at = ?,
+                       goal_id = ?, metadata = ?
+                   WHERE id = ?""",
+                (
+                    event.domain,
+                    event.value,
+                    event.unit,
+                    event.confidence,
+                    _iso(event.occurred_at),
+                    event.goal_id,
+                    json.dumps(event.metadata),
+                    event.id,
+                ),
+            )
+        return event, "updated"
 
     def list_events(self, tenant_id: str) -> list[ProgressEvent]:
         with self._connect() as connection:

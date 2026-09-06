@@ -28,6 +28,9 @@ ROUTING_KEYWORDS: dict[AgentId, tuple[str, ...]] = {
         "progress", "chart", "trend", "report", "analytics", "monthly", "weekly review",
     ),
     AgentId.CHIEF_ARCHIVIST: ("remember", "memory", "forget", "preference", "context"),
+    AgentId.CHIEF_FINANCE_OFFICER: (
+        "finance", "financial", "expense", "spending", "budget", "saving", "purchase",
+    ),
 }
 
 AGENT_AREAS: dict[AgentId, LifeArea] = {
@@ -38,6 +41,7 @@ AGENT_AREAS: dict[AgentId, LifeArea] = {
     AgentId.FITNESS_COACH: LifeArea.FITNESS,
     AgentId.INNER_WELLBEING_GURU: LifeArea.WELLBEING,
     AgentId.OPERATIONS_MANAGER: LifeArea.OPERATIONS,
+    AgentId.CHIEF_FINANCE_OFFICER: LifeArea.FINANCE,
 }
 
 

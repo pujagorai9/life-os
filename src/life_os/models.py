@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import StrEnum
+import re
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 def utc_now() -> datetime:
@@ -23,6 +24,7 @@ class AgentId(StrEnum):
     CHIEF_ACCOUNTABILITY_OFFICER = "chief_accountability_officer"
     HEAD_OF_PERFORMANCE_ANALYTICS = "head_of_performance_analytics"
     CHIEF_ARCHIVIST = "chief_archivist"
+    CHIEF_FINANCE_OFFICER = "chief_finance_officer"
 
 
 class AgentDefinition(BaseModel):
@@ -42,6 +44,19 @@ class ProposedAction(BaseModel):
     due_at: datetime | None = None
     requires_approval: bool = True
 
+    @field_validator("due_at", mode="before")
+    @classmethod
+    def normalize_relative_due_at(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip().casefold()
+        if normalized == "now":
+            return datetime.now().astimezone()
+        if normalized == "today":
+            local_now = datetime.now().astimezone()
+            return local_now.replace(hour=23, minute=59, second=59, microsecond=0)
+        return value
+
 
 class AgentOutput(BaseModel):
     agent_id: AgentId
@@ -59,6 +74,7 @@ class LifeArea(StrEnum):
     FITNESS = "fitness"
     WELLBEING = "wellbeing"
     OPERATIONS = "operations"
+    FINANCE = "finance"
 
 
 class LifeAreaOption(BaseModel):
@@ -131,6 +147,7 @@ class GoalRoutine(BaseModel):
     unit: str = "completion"
     minimum_success: str
     preferred_time: str | None = None
+    kind: MilestoneKind = MilestoneKind.USER_COMMITMENT
 
 
 class GoalContractCreate(BaseModel):
@@ -191,7 +208,16 @@ class TrackingPrompt(BaseModel):
     preferred_time: str | None = None
     due_at: datetime | None = None
     agent_id: AgentId | None = None
+    kind: MilestoneKind = MilestoneKind.USER_COMMITMENT
+    input_required: bool | None = None
     active: bool = True
+
+    @model_validator(mode="after")
+    def infer_legacy_agent_delivery(self) -> TrackingPrompt:
+        """Keep older saved protocols safe after delivery kinds were introduced."""
+        if self.prompt.lstrip().startswith("Prepare and deliver:"):
+            self.kind = MilestoneKind.AGENT_DELIVERY
+        return self
 
 
 class TrackingProtocol(BaseModel):
@@ -250,6 +276,11 @@ class CheckInStatus(StrEnum):
     SKIPPED = "skipped"
 
 
+class CheckInOutcome(StrEnum):
+    DONE = "done"
+    PARTIAL = "partial"
+
+
 class ScheduledCheckIn(BaseModel):
     id: str
     tenant_id: str
@@ -259,13 +290,86 @@ class ScheduledCheckIn(BaseModel):
     agent_id: AgentId
     prompt: str
     due_at: datetime
+    kind: MilestoneKind = MilestoneKind.USER_COMMITMENT
+    input_required: bool | None = None
     status: CheckInStatus = CheckInStatus.PENDING
+    outcome: CheckInOutcome | None = None
+    completed_at: datetime | None = None
+    status_updated_at: datetime | None = None
     created_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def infer_legacy_agent_delivery(self) -> ScheduledCheckIn:
+        """Recognize automatic deliveries already stored before this field existed."""
+        if self.prompt.lstrip().startswith("Prepare and deliver:"):
+            self.kind = MilestoneKind.AGENT_DELIVERY
+        return self
 
 
 class CheckInStatusUpdate(BaseModel):
     tenant_id: str
     status: CheckInStatus
+    outcome: CheckInOutcome | None = None
+
+
+class PhotoAnalysis(BaseModel):
+    summary: str
+    observations: list[str] = Field(default_factory=list)
+    estimated_calories: float | None = None
+    estimated_protein_g: float | None = None
+    estimated_carbohydrates_g: float | None = None
+    estimated_fat_g: float | None = None
+    estimated_fiber_g: float | None = None
+    estimated_calcium_mg: float | None = None
+    confidence: float = Field(ge=0, le=1)
+    caveats: list[str] = Field(default_factory=list)
+
+
+class NutritionAnalysisRequest(BaseModel):
+    tenant_id: str
+    description: str = Field(min_length=1, max_length=2000)
+
+
+class NutritionInputImage(BaseModel):
+    media_type: str
+    data: str = Field(min_length=1)
+
+
+class NutritionConversationRequest(BaseModel):
+    tenant_id: str
+    description: str = Field(default="", max_length=4000)
+    images: list[NutritionInputImage] = Field(default_factory=list, max_length=5)
+
+    @model_validator(mode="after")
+    def require_text_or_image(self) -> NutritionConversationRequest:
+        if not self.description.strip() and not self.images:
+            raise ValueError("Add a description or at least one meal image")
+        return self
+
+
+class PhotoAnalysisStatus(StrEnum):
+    NOT_REQUESTED = "not_requested"
+    COMPLETED = "completed"
+    UNAVAILABLE = "unavailable"
+
+
+class CheckInPhoto(BaseModel):
+    id: str
+    tenant_id: str
+    check_in_id: str
+    agent_id: AgentId
+    storage_key: str
+    media_type: str
+    size_bytes: int
+    sha256: str
+    analysis_status: PhotoAnalysisStatus = PhotoAnalysisStatus.NOT_REQUESTED
+    analysis: PhotoAnalysis | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class NutritionConversationResult(BaseModel):
+    photos: list[CheckInPhoto]
+    analysis: PhotoAnalysis
 
 
 class ConversationRole(StrEnum):
@@ -390,6 +494,171 @@ class ProgressEventCreate(BaseModel):
 
 class ProgressEvent(ProgressEventCreate):
     id: str
+
+
+class BriefingDocument(BaseModel):
+    day: date
+    title: str
+    markdown: str
+    source_file: str
+
+
+class AppointmentSyncItem(BaseModel):
+    action: str
+    outcome: str
+    summary: str
+    event_date: date | None = None
+    event_time: str | None = None
+    exception: bool = False
+
+
+class AppointmentSyncDocument(BaseModel):
+    day: date
+    processed_at: datetime
+    cutoff_at: datetime | None = None
+    emails_processed: int
+    events_created: int
+    events_updated: int
+    events_cancelled: int
+    existing_events_matched: int
+    items: list[AppointmentSyncItem] = Field(default_factory=list)
+
+
+class FinanceEmailResultCreate(BaseModel):
+    tenant_id: str
+    source_message_id: str
+    source_account_id: str = "primary"
+    source_account_email: str | None = None
+    household_member: str | None = None
+    message_at: datetime
+    outcome: str
+    merchant: str | None = None
+    category: str | None = None
+    amount: float | None = Field(default=None, ge=0)
+    currency: str | None = None
+    transaction_at: datetime | None = None
+    confidence: float = Field(default=1, ge=0, le=1)
+    summary: str | None = None
+
+    @model_validator(mode="after")
+    def validate_transaction_fields(self) -> FinanceEmailResultCreate:
+        allowed = {"purchase", "refund", "not_purchase", "ambiguous"}
+        if self.outcome not in allowed:
+            raise ValueError(f"outcome must be one of {sorted(allowed)}")
+        if self.outcome in {"purchase", "refund"}:
+            if not self.merchant or not self.category:
+                raise ValueError("purchase and refund results require merchant and category")
+            if self.amount is None or not self.currency or self.transaction_at is None:
+                raise ValueError(
+                    "purchase and refund results require amount, currency, and transaction_at"
+                )
+        return self
+
+
+class ExpenseRecord(BaseModel):
+    id: str
+    tenant_id: str
+    source_message_id: str
+    source_account_id: str = "primary"
+    source_account_email: str | None = None
+    household_member: str | None = None
+    transaction_at: datetime
+    merchant: str
+    category: str
+    amount: float = Field(ge=0)
+    currency: str
+    kind: str = "purchase"
+    confidence: float = Field(ge=0, le=1)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class FinanceCategoryTotal(BaseModel):
+    category: str
+    amount: float
+
+
+class FinanceCurrencySummary(BaseModel):
+    currency: str
+    total_spent: float
+    total_refunded: float
+    net_spent: float
+    categories: list[FinanceCategoryTotal] = Field(default_factory=list)
+
+
+class FinanceDailyReport(BaseModel):
+    day: date
+    purchase_count: int
+    processed_email_count: int
+    summaries: list[FinanceCurrencySummary] = Field(default_factory=list)
+    transactions: list[ExpenseRecord] = Field(default_factory=list)
+
+
+class FinanceEmailAccount(BaseModel):
+    account_id: str
+    email: str
+    member_name: str
+    connected_at: datetime
+    scopes: list[str] = Field(default_factory=list)
+
+
+class AppleHealthWorkout(BaseModel):
+    workout_id: str | None = None
+    activity_type: str = Field(min_length=1, max_length=120)
+    started_at: datetime
+    duration_minutes: float = Field(ge=0)
+    active_energy_kcal: float | None = Field(default=None, ge=0)
+
+
+class AppleHealthDailyImport(BaseModel):
+    tenant_id: str
+    day: date
+    timezone: str = Field(min_length=1, max_length=100)
+    active_energy_kcal: float | None = Field(default=None, ge=0)
+    move_goal_kcal: float | None = Field(default=None, gt=0)
+    exercise_minutes: float | None = Field(default=None, ge=0)
+    exercise_goal_minutes: float = Field(default=30, gt=0)
+    stand_hours: float | None = Field(default=None, ge=0)
+    stand_minutes: float | None = Field(default=None, ge=0)
+    stand_goal_hours: float = Field(default=12, gt=0)
+    cardio_minutes: float | None = Field(default=None, ge=0)
+    strength_minutes: float | None = Field(default=None, ge=0)
+    workouts: list[AppleHealthWorkout] = Field(default_factory=list, max_length=100)
+
+    @field_validator("day", mode="before")
+    @classmethod
+    def normalize_shortcuts_date(cls, value: Any) -> Any:
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, str) and "T" in value:
+            return value[:10]
+        return value
+
+    @field_validator(
+        "active_energy_kcal",
+        "move_goal_kcal",
+        "exercise_minutes",
+        "exercise_goal_minutes",
+        "stand_hours",
+        "stand_minutes",
+        "stand_goal_hours",
+        "cardio_minutes",
+        "strength_minutes",
+        mode="before",
+    )
+    @classmethod
+    def normalize_shortcuts_measurement(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        match = re.search(r"[-+]?\d[\d,]*(?:\.\d+)?", value)
+        return float(match.group(0).replace(",", "")) if match else value
+
+
+class AppleHealthImportResult(BaseModel):
+    accepted: bool = True
+    created_events: int
+    updated_events: int
+    unchanged_events: int
+    imported_metrics: list[str]
 
 
 class MemoryCreate(BaseModel):

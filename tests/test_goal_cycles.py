@@ -213,6 +213,22 @@ def test_goal_approval_creates_editable_tracking_protocol(tmp_path: Path) -> Non
         json={"tenant_id": "tenant-a", "status": "delivered"},
     )
     assert delivered.json()["status"] == "delivered"
+    completed = client.patch(
+        f"/v1/check-ins/{due[1]['id']}",
+        json={"tenant_id": "tenant-a", "status": "responded", "outcome": "done"},
+    )
+    assert completed.json()["outcome"] == "done"
+    assert completed.json()["completed_at"] is not None
+    day = client.get(
+        "/v1/check-ins",
+        params={
+            "tenant_id": "tenant-a",
+            "start_at": "2030-01-01T00:00:00Z",
+            "end_at": "2030-01-01T23:59:59Z",
+        },
+    ).json()
+    saved_completion = next(item for item in day if item["id"] == due[1]["id"])
+    assert saved_completion["completed_at"] == completed.json()["completed_at"]
     remaining = client.get(
         "/v1/check-ins/due",
         params={"tenant_id": "tenant-a", "as_of": "2030-01-01T21:00:00Z"},
@@ -283,8 +299,68 @@ def test_agent_delivery_milestone_prompts_the_owning_agent(tmp_path: Path) -> No
         if prompt["cadence"] == "once"
     )
     assert milestone_prompt["agent_id"] == "briefing_intern"
+    assert milestone_prompt["kind"] == "agent_delivery"
     assert milestone_prompt["prompt"].startswith("Prepare and deliver")
     assert "Do not ask the user to report" in milestone_prompt["prompt"]
+
+    approval = client.post(
+        f"/v1/goals/{draft['id']}/tracking-protocol/approval",
+        json={"tenant_id": "tenant-a", "approved": True},
+    )
+    assert approval.status_code == 200
+    due = client.get(
+        "/v1/check-ins/due",
+        params={"tenant_id": "tenant-a", "as_of": "2030-02-01T08:00:00Z"},
+    ).json()
+    delivery = next(item for item in due if item["prompt_id"] == milestone_prompt["id"])
+    assert delivery["kind"] == "agent_delivery"
+
+
+def test_recurring_agent_work_is_a_delivery_not_a_user_task(tmp_path: Path) -> None:
+    client = TestClient(create_app(tmp_path / "api.db"))
+    payload = goal_payload()
+    payload["domain"] = "operations"
+    payload["owner_agent"] = "operations_manager"
+    payload["routines"] = [
+        {
+            "title": "Appointment and Calendar Sync",
+            "cadence": "daily",
+            "target_count": 1,
+            "unit": "sync",
+            "minimum_success": "Review confirmed appointment messages and safely sync the calendar",
+            "preferred_time": "22:30",
+            "kind": "agent_delivery",
+        }
+    ]
+    draft = client.post("/v1/goals", json=payload).json()
+    activation = client.post(
+        f"/v1/goals/{draft['id']}/approve", params={"tenant_id": "tenant-a"}
+    ).json()
+
+    delivery = next(
+        prompt
+        for prompt in activation["proposed_tracking_protocol"]["prompts"]
+        if prompt["cadence"] == "daily"
+    )
+    assert delivery["kind"] == "agent_delivery"
+    assert delivery["agent_id"] == "operations_manager"
+    assert delivery["response_type"] == "text"
+    assert delivery["prompt"].startswith("Prepare and deliver:")
+    assert "Did you complete" not in delivery["prompt"]
+
+
+def test_goal_metrics_are_calculated_not_scheduled_as_user_questions(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_app(tmp_path / "api.db"))
+    draft = client.post("/v1/goals", json=goal_payload()).json()
+    activation = client.post(
+        f"/v1/goals/{draft['id']}/approve", params={"tenant_id": "tenant-a"}
+    ).json()
+
+    prompts = activation["proposed_tracking_protocol"]["prompts"]
+    assert not any(prompt["metric_key"] for prompt in prompts)
+    assert not any(prompt["prompt"].startswith("What was your") for prompt in prompts)
 
 
 def test_goal_amendments_are_versioned(tmp_path: Path) -> None:

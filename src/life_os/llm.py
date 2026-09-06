@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from typing import Protocol
 
 import httpx
@@ -24,10 +25,16 @@ class OpenAIResponsesClient:
 
     def respond(self, agent: AgentDefinition, message: str, context: str) -> AgentOutput:
         schema = AgentOutput.model_json_schema()
+        local_now = datetime.now().astimezone()
         payload = {
             "model": self.model,
             "store": False,
-            "instructions": agent.instructions,
+            "instructions": (
+                f"{agent.instructions}\n\n"
+                "Timestamp rule: when proposed_actions.due_at is present, return a full "
+                "timezone-aware ISO 8601 timestamp, never a relative word such as now or "
+                f"today. The current local timestamp is {local_now.isoformat()}."
+            ),
             "input": f"Relevant confirmed context:\n{context or '(none)'}\n\nCEO request:\n{message}",
             "text": {
                 "format": {

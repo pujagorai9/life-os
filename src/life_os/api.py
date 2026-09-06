@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import json
 import os
+import re
+import secrets
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import FastAPI, HTTPException, Query
+import httpx
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 
 from life_os.agent_catalog import list_agents
 from life_os.analytics import build_progress_summary
@@ -23,12 +31,24 @@ from life_os.lifecycle import (
 )
 from life_os.models import (
     AgentDefinition,
+    AgentId,
     AgentOutput,
+    AppointmentSyncDocument,
+    AppointmentSyncItem,
+    AppleHealthDailyImport,
+    AppleHealthImportResult,
+    BriefingDocument,
     ChatRequest,
     Commitment,
     CommitmentCreate,
     CommitmentStatus,
+    CheckInPhoto,
     CheckInStatusUpdate,
+    ConversationRole,
+    ExpenseRecord,
+    FinanceDailyReport,
+    FinanceEmailAccount,
+    FinanceEmailResultCreate,
     GoalActivationResult,
     GoalAmendment,
     GoalAmendmentCreate,
@@ -46,12 +66,16 @@ from life_os.models import (
     KnowledgeRecordCreate,
     Memory,
     MemoryCreate,
+    NutritionAnalysisRequest,
+    NutritionConversationRequest,
+    NutritionConversationResult,
     OnboardingSelection,
     PlanningMessage,
     PlanningMessageCreate,
     PlanningSessionStatus,
     PlanningTurn,
-    ConversationRole,
+    PhotoAnalysis,
+    PhotoAnalysisStatus,
     ProgressEvent,
     ProgressEventCreate,
     ProgressSummary,
@@ -62,13 +86,129 @@ from life_os.models import (
     utc_now,
 )
 from life_os.orchestrator import LifeOS
+from life_os.photo_analysis import (
+    analyze_check_in_photo,
+    analyze_nutrition_description,
+    analyze_nutrition_input,
+)
 from life_os.store import LifeOSStore
+from life_os.apple_health import import_apple_health_daily
 
 
-def create_app(database: str | Path | None = None) -> FastAPI:
+MAX_PHOTO_BYTES = 12 * 1024 * 1024
+PHOTO_AGENTS = {
+    AgentId.NUTRITION_COACH,
+    AgentId.FITNESS_COACH,
+    AgentId.KNOWLEDGE_GURU,
+    AgentId.CAREER_COACH,
+}
+
+
+def _authorize_private_api(request: Request) -> None:
+    """Require the shared server-to-server token when cloud auth is enabled."""
+    expected = os.getenv("LIFE_OS_API_TOKEN", "").strip()
+    if not expected:
+        return
+    supplied = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    if not supplied or not secrets.compare_digest(supplied, expected):
+        raise HTTPException(status_code=401, detail="Invalid Life OS API token")
+
+
+def _validated_image_type(image: bytes, declared_type: str) -> tuple[str, str]:
+    media_type = declared_type.split(";", 1)[0].strip().lower()
+    signatures = {
+        "image/jpeg": ("jpg", image.startswith(b"\xff\xd8\xff")),
+        "image/png": ("png", image.startswith(b"\x89PNG\r\n\x1a\n")),
+        "image/webp": (
+            "webp",
+            len(image) >= 12 and image.startswith(b"RIFF") and image[8:12] == b"WEBP",
+        ),
+        "image/heic": (
+            "heic",
+            len(image) >= 12
+            and image[4:8] == b"ftyp"
+            and image[8:12] in {b"heic", b"heix", b"hevc"},
+        ),
+        "image/heif": (
+            "heif",
+            len(image) >= 12 and image[4:8] == b"ftyp" and image[8:12] in {b"heif", b"mif1"},
+        ),
+    }
+    extension, valid = signatures.get(media_type, ("", False))
+    if not valid:
+        raise ValueError("Upload a valid JPEG, PNG, WebP, HEIC, or HEIF image")
+    return media_type, extension
+
+
+def _health_ingest_token() -> str:
+    token_path = Path(
+        os.getenv(
+            "LIFE_OS_HEALTH_INGEST_TOKEN_PATH",
+            "private/apple-health-ingest-token.txt",
+        )
+    )
+    try:
+        return token_path.read_text().strip()
+    except OSError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Apple Health ingestion has not been configured",
+        ) from error
+
+
+def _authorize_health_ingest(authorization: str | None) -> None:
+    expected = _health_ingest_token()
+    supplied = authorization.removeprefix("Bearer ").strip() if authorization else ""
+    if not supplied or not secrets.compare_digest(supplied, expected):
+        raise HTTPException(status_code=401, detail="Invalid ingestion token")
+
+
+def create_app(
+    database: str | Path | None = None,
+    briefings_dir: str | Path | None = None,
+    appointment_ledger_path: str | Path | None = None,
+    gmail_accounts_path: str | Path | None = None,
+) -> FastAPI:
     app = FastAPI(title="Life OS", version="0.4.0")
     store = LifeOSStore(database or os.getenv("LIFE_OS_DATABASE", "life_os.db"))
-    runtime = LifeOS(store=store, profile=load_profile())
+    profile = load_profile()
+    runtime = LifeOS(store=store, profile=profile)
+    private_briefings = Path(
+        briefings_dir or os.getenv("LIFE_OS_BRIEFINGS_DIR", "private/briefings")
+    )
+    appointment_ledger = Path(
+        appointment_ledger_path
+        or os.getenv(
+            "LIFE_OS_APPOINTMENT_LEDGER", "private/appointment-ledger.json"
+        )
+    )
+    gmail_accounts = Path(
+        gmail_accounts_path
+        or os.getenv("LIFE_OS_GMAIL_ACCOUNTS", "private/gmail-accounts.json")
+    )
+    try:
+        user_timezone = ZoneInfo(
+            os.getenv("LIFE_OS_TIMEZONE", profile.user.timezone)
+        )
+    except ZoneInfoNotFoundError:
+        user_timezone = ZoneInfo("UTC")
+
+    @app.middleware("http")
+    async def private_api_auth(request: Request, call_next):
+        # Health checks remain accessible to the hosting platform. Apple Health
+        # ingestion has its own narrowly scoped bearer token.
+        if request.url.path != "/health" and not request.url.path.startswith(
+            "/v1/integrations/apple-health/"
+        ):
+            try:
+                _authorize_private_api(request)
+            except HTTPException as error:
+                return Response(
+                    content=json.dumps({"detail": error.detail}),
+                    status_code=error.status_code,
+                    media_type="application/json",
+                )
+        return await call_next(request)
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -77,6 +217,178 @@ def create_app(database: str | Path | None = None) -> FastAPI:
     @app.get("/v1/agents", response_model=list[AgentDefinition])
     def agents() -> list[AgentDefinition]:
         return list_agents()
+
+    @app.post("/v1/finance/email-results", response_model=ExpenseRecord | None)
+    def save_finance_email_result(
+        request: FinanceEmailResultCreate,
+    ) -> ExpenseRecord | None:
+        return store.save_finance_email_result(request)
+
+    @app.get("/v1/finance/daily/{day}", response_model=FinanceDailyReport)
+    def finance_daily_report(
+        day: date, tenant_id: str = Query(...)
+    ) -> FinanceDailyReport:
+        return store.finance_daily_report(tenant_id, day, user_timezone)
+
+    @app.get("/v1/finance/accounts", response_model=list[FinanceEmailAccount])
+    def finance_accounts(tenant_id: str = Query(...)) -> list[FinanceEmailAccount]:
+        if not tenant_id.strip():
+            raise HTTPException(status_code=422, detail="tenant_id is required")
+        from life_os.connectors.google_gmail import list_gmail_accounts
+
+        try:
+            return [
+                FinanceEmailAccount.model_validate(item)
+                for item in list_gmail_accounts(gmail_accounts)
+            ]
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            raise HTTPException(
+                status_code=503, detail="Finance email connections could not be read"
+            ) from error
+
+    @app.get("/v1/briefings/{day}", response_model=BriefingDocument)
+    def briefing(day: date, tenant_id: str = Query(...)) -> BriefingDocument:
+        # The public app supplies the interface; briefing files remain in the
+        # tenant's ignored private directory on their own Life OS host.
+        if not tenant_id.strip():
+            raise HTTPException(status_code=422, detail="tenant_id is required")
+        candidates = sorted(private_briefings.glob(f"{day.isoformat()}*.md"))
+        if not candidates:
+            raise HTTPException(status_code=404, detail="Briefing is not available yet")
+        source = candidates[-1]
+        try:
+            markdown = source.read_text(encoding="utf-8")
+        except OSError as error:
+            raise HTTPException(
+                status_code=503, detail="Briefing could not be opened"
+            ) from error
+        if len(markdown.encode("utf-8")) > 512 * 1024:
+            raise HTTPException(status_code=413, detail="Briefing is too large")
+        first_line = markdown.splitlines()[0].strip() if markdown else ""
+        title = first_line.removeprefix("# ").strip() or f"Briefing — {day}"
+        return BriefingDocument(
+            day=day,
+            title=title,
+            markdown=markdown,
+            source_file=source.name,
+        )
+
+    @app.get(
+        "/v1/appointment-syncs/{day}", response_model=AppointmentSyncDocument
+    )
+    def appointment_sync(
+        day: date, tenant_id: str = Query(...)
+    ) -> AppointmentSyncDocument:
+        if not tenant_id.strip():
+            raise HTTPException(status_code=422, detail="tenant_id is required")
+        try:
+            raw = appointment_ledger.read_text(encoding="utf-8")
+            ledger = json.loads(raw)
+        except FileNotFoundError as error:
+            raise HTTPException(
+                status_code=404, detail="Appointment sync is not available yet"
+            ) from error
+        except (OSError, json.JSONDecodeError) as error:
+            raise HTTPException(
+                status_code=503, detail="Appointment sync could not be opened"
+            ) from error
+
+        def parse_instant(value: object) -> datetime | None:
+            if not isinstance(value, str) or not value.strip():
+                return None
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+
+        entries = [
+            entry
+            for entry in ledger.get("entries", [])
+            if isinstance(entry, dict)
+            and (instant := parse_instant(entry.get("processed_at"))) is not None
+            and instant.astimezone(user_timezone).date() == day
+        ]
+        ledger_processed_at = parse_instant(ledger.get("processed_at"))
+        run_matches_day = bool(
+            ledger_processed_at
+            and ledger_processed_at.astimezone(user_timezone).date() == day
+        )
+        if not entries and not run_matches_day:
+            raise HTTPException(
+                status_code=404, detail="Appointment sync is not available for this day"
+            )
+        processed_at = ledger_processed_at or max(
+            parse_instant(entry.get("processed_at")) for entry in entries
+        )
+        assert processed_at is not None
+
+        exception_summaries = {
+            item.get("gmail_message_id"): str(item.get("summary", "")).strip()
+            for item in ledger.get("exceptions", [])
+            if isinstance(item, dict)
+        }
+        items: list[AppointmentSyncItem] = []
+        created = updated = cancelled = matched = 0
+        for entry in entries:
+            action_key = str(entry.get("action", "")).casefold()
+            outcome_key = str(entry.get("outcome", "")).casefold()
+            is_exception = "exception" in outcome_key or "failed" in outcome_key
+            if "create" in action_key or "created" in outcome_key:
+                created += 1
+                action = "Created calendar event"
+            elif "cancel" in action_key or "cancelled" in outcome_key:
+                cancelled += 1
+                action = "Cancelled calendar event"
+            elif "update" in action_key or "reschedul" in action_key:
+                updated += 1
+                action = "Updated calendar event"
+            elif "match" in action_key or "existing" in outcome_key:
+                matched += 1
+                action = "Matched existing event"
+            else:
+                action = "Reviewed appointment"
+
+            fingerprint = str(entry.get("event_fingerprint", ""))
+            event_date: date | None = None
+            event_time: str | None = None
+            match = re.search(r"-(\d{4})-(\d{2})-(\d{2})-(\d{4})$", fingerprint)
+            if match:
+                try:
+                    event_date = date(
+                        int(match.group(1)), int(match.group(2)), int(match.group(3))
+                    )
+                    clock = datetime.strptime(match.group(4), "%H%M")
+                    event_time = clock.strftime("%-I:%M %p")
+                except ValueError:
+                    event_date = None
+                    event_time = None
+
+            summary = exception_summaries.get(entry.get("gmail_message_id"), "")
+            if not summary:
+                summary = str(entry.get("outcome", "Reviewed successfully"))
+                summary = summary.replace("_", " ").strip().capitalize()
+            items.append(
+                AppointmentSyncItem(
+                    action=action,
+                    outcome=str(entry.get("outcome", "unknown")),
+                    summary=summary,
+                    event_date=event_date,
+                    event_time=event_time,
+                    exception=is_exception,
+                )
+            )
+
+        return AppointmentSyncDocument(
+            day=day,
+            processed_at=processed_at,
+            cutoff_at=parse_instant(ledger.get("current_cutoff_inclusive")),
+            emails_processed=len(entries),
+            events_created=created,
+            events_updated=updated,
+            events_cancelled=cancelled,
+            existing_events_matched=matched,
+            items=items,
+        )
 
     @app.get("/v1/onboarding/options", response_model=list[LifeAreaOption])
     def onboarding_options() -> list[LifeAreaOption]:
@@ -285,16 +597,245 @@ def create_app(database: str | Path | None = None) -> FastAPI:
     ) -> list[ScheduledCheckIn]:
         return store.due_check_ins(tenant_id, as_of or utc_now(), limit)
 
+    @app.get("/v1/check-ins", response_model=list[ScheduledCheckIn])
+    def check_ins(
+        tenant_id: str = Query(...),
+        start_at: datetime = Query(...),
+        end_at: datetime = Query(...),
+        limit: int = Query(500, ge=1, le=1000),
+    ) -> list[ScheduledCheckIn]:
+        if end_at < start_at:
+            raise HTTPException(status_code=422, detail="end_at must not precede start_at")
+        return store.list_check_ins(tenant_id, start_at, end_at, limit)
+
     @app.patch("/v1/check-ins/{check_in_id}", response_model=ScheduledCheckIn)
     def update_check_in(
         check_in_id: str, request: CheckInStatusUpdate
     ) -> ScheduledCheckIn:
         try:
             return store.update_check_in_status(
-                request.tenant_id, check_in_id, request.status
+                request.tenant_id, check_in_id, request.status, request.outcome
             )
         except KeyError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @app.post("/v1/check-ins/{check_in_id}/photos", response_model=CheckInPhoto)
+    async def upload_check_in_photo(
+        check_in_id: str,
+        request: Request,
+        tenant_id: str = Query(...),
+        analyze: bool = Query(False),
+    ) -> CheckInPhoto:
+        try:
+            check_in = store.get_check_in(tenant_id, check_in_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        if check_in.agent_id not in PHOTO_AGENTS:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Photos are enabled only for Nutrition Coach, Fitness Coach, "
+                    "Knowledge Guru, and Career Coach tasks"
+                ),
+            )
+        declared_size = request.headers.get("content-length")
+        if declared_size and int(declared_size) > MAX_PHOTO_BYTES:
+            raise HTTPException(status_code=413, detail="Photo must be 12 MB or smaller")
+        image = await request.body()
+        if not image:
+            raise HTTPException(status_code=422, detail="Photo is empty")
+        if len(image) > MAX_PHOTO_BYTES:
+            raise HTTPException(status_code=413, detail="Photo must be 12 MB or smaller")
+        try:
+            media_type, extension = _validated_image_type(
+                image, request.headers.get("content-type", "")
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=415, detail=str(error)) from error
+
+        analysis = None
+        analysis_status = PhotoAnalysisStatus.NOT_REQUESTED
+        if analyze:
+            try:
+                analysis = analyze_check_in_photo(
+                    agent_id=check_in.agent_id,
+                    prompt=check_in.prompt,
+                    media_type=media_type,
+                    image=image,
+                )
+                analysis_status = (
+                    PhotoAnalysisStatus.COMPLETED
+                    if analysis
+                    else PhotoAnalysisStatus.UNAVAILABLE
+                )
+            except (httpx.HTTPError, ValueError, json.JSONDecodeError):
+                analysis_status = PhotoAnalysisStatus.UNAVAILABLE
+
+        photo_id = str(uuid.uuid4())
+        tenant_segment = hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:16]
+        photo = CheckInPhoto(
+            id=photo_id,
+            tenant_id=tenant_id,
+            check_in_id=check_in_id,
+            agent_id=check_in.agent_id,
+            storage_key=f"{tenant_segment}/{photo_id}.{extension}",
+            media_type=media_type,
+            size_bytes=len(image),
+            sha256=hashlib.sha256(image).hexdigest(),
+            analysis_status=analysis_status,
+            analysis=analysis,
+        )
+        return store.save_check_in_photo(photo, image, extension)
+
+    @app.post(
+        "/v1/check-ins/{check_in_id}/photos/{photo_id}/analyze",
+        response_model=CheckInPhoto,
+    )
+    def reanalyze_check_in_photo(
+        check_in_id: str, photo_id: str, tenant_id: str = Query(...)
+    ) -> CheckInPhoto:
+        try:
+            check_in = store.get_check_in(tenant_id, check_in_id)
+            photo = store.get_check_in_photo(tenant_id, check_in_id, photo_id)
+            image = store.read_check_in_photo(photo)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (OSError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        try:
+            analysis = analyze_check_in_photo(
+                agent_id=check_in.agent_id,
+                prompt=check_in.prompt,
+                media_type=photo.media_type,
+                image=image,
+            )
+        except (httpx.HTTPError, ValueError, json.JSONDecodeError) as error:
+            raise HTTPException(
+                status_code=502, detail="Photo analysis is temporarily unavailable"
+            ) from error
+        if analysis is None:
+            raise HTTPException(status_code=503, detail="Photo analysis is not configured")
+        return store.update_check_in_photo_analysis(photo, analysis)
+
+    @app.post(
+        "/v1/check-ins/{check_in_id}/nutrition-analysis",
+        response_model=PhotoAnalysis,
+    )
+    def analyze_nutrition(
+        check_in_id: str, request: NutritionAnalysisRequest
+    ) -> PhotoAnalysis:
+        try:
+            check_in = store.get_check_in(request.tenant_id, check_in_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        if check_in.agent_id != AgentId.NUTRITION_COACH:
+            raise HTTPException(
+                status_code=422,
+                detail="Nutrition analysis is enabled only for Nutrition Coach tasks",
+            )
+        try:
+            analysis = analyze_nutrition_description(
+                prompt=check_in.prompt, description=request.description
+            )
+        except (httpx.HTTPError, ValueError, json.JSONDecodeError) as error:
+            raise HTTPException(
+                status_code=502, detail="Nutrition analysis is temporarily unavailable"
+            ) from error
+        if analysis is None:
+            raise HTTPException(
+                status_code=503, detail="Nutrition analysis is not configured"
+            )
+        return analysis
+
+    @app.post(
+        "/v1/check-ins/{check_in_id}/nutrition-conversation",
+        response_model=NutritionConversationResult,
+    )
+    def analyze_nutrition_conversation(
+        check_in_id: str, request: NutritionConversationRequest
+    ) -> NutritionConversationResult:
+        try:
+            check_in = store.get_check_in(request.tenant_id, check_in_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        if check_in.agent_id != AgentId.NUTRITION_COACH:
+            raise HTTPException(
+                status_code=422,
+                detail="Nutrition conversation is enabled only for Nutrition Coach tasks",
+            )
+
+        validated_images: list[tuple[str, str, bytes]] = []
+        for input_image in request.images:
+            try:
+                image = base64.b64decode(input_image.data, validate=True)
+            except (binascii.Error, ValueError) as error:
+                raise HTTPException(
+                    status_code=422, detail="One of the meal images is invalid"
+                ) from error
+            if len(image) > MAX_PHOTO_BYTES:
+                raise HTTPException(
+                    status_code=413, detail="Each photo must be 12 MB or smaller"
+                )
+            try:
+                media_type, extension = _validated_image_type(
+                    image, input_image.media_type
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=415, detail=str(error)) from error
+            if media_type not in {"image/jpeg", "image/png", "image/webp"}:
+                raise HTTPException(
+                    status_code=415,
+                    detail="Meal analysis supports JPEG, PNG, and WebP images",
+                )
+            validated_images.append((media_type, extension, image))
+
+        try:
+            analysis = analyze_nutrition_input(
+                prompt=check_in.prompt,
+                description=request.description,
+                images=[(media_type, image) for media_type, _, image in validated_images],
+            )
+        except (httpx.HTTPError, ValueError, json.JSONDecodeError) as error:
+            raise HTTPException(
+                status_code=502, detail="Nutrition analysis is temporarily unavailable"
+            ) from error
+        if analysis is None:
+            raise HTTPException(
+                status_code=503, detail="Nutrition analysis is not configured"
+            )
+
+        tenant_segment = hashlib.sha256(
+            request.tenant_id.encode("utf-8")
+        ).hexdigest()[:16]
+        photos: list[CheckInPhoto] = []
+        for media_type, extension, image in validated_images:
+            photo_id = str(uuid.uuid4())
+            photo = CheckInPhoto(
+                id=photo_id,
+                tenant_id=request.tenant_id,
+                check_in_id=check_in_id,
+                agent_id=check_in.agent_id,
+                storage_key=f"{tenant_segment}/{photo_id}.{extension}",
+                media_type=media_type,
+                size_bytes=len(image),
+                sha256=hashlib.sha256(image).hexdigest(),
+                analysis_status=PhotoAnalysisStatus.COMPLETED,
+                analysis=analysis,
+            )
+            photos.append(store.save_check_in_photo(photo, image, extension))
+        return NutritionConversationResult(photos=photos, analysis=analysis)
+
+    @app.get(
+        "/v1/check-ins/{check_in_id}/photos", response_model=list[CheckInPhoto]
+    )
+    def check_in_photos(
+        check_in_id: str, tenant_id: str = Query(...)
+    ) -> list[CheckInPhoto]:
+        try:
+            store.get_check_in(tenant_id, check_in_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return store.list_check_in_photos(tenant_id, check_in_id)
 
     @app.get("/v1/reviews/due", response_model=list[GoalContract])
     def due_reviews(
@@ -347,6 +888,54 @@ def create_app(database: str | Path | None = None) -> FastAPI:
     @app.post("/v1/events", response_model=ProgressEvent)
     def create_event(request: ProgressEventCreate) -> ProgressEvent:
         return store.create_event(request)
+
+    @app.post(
+        "/v1/integrations/apple-health/import",
+        response_model=AppleHealthImportResult,
+    )
+    def import_apple_health(
+        request: AppleHealthDailyImport,
+        authorization: str | None = Header(default=None),
+    ) -> AppleHealthImportResult:
+        _authorize_health_ingest(authorization)
+        return import_apple_health_daily(store, request)
+
+    @app.post(
+        "/v1/integrations/apple-health/shortcut",
+        response_model=AppleHealthImportResult,
+    )
+    def import_apple_health_shortcut(
+        tenant_id: str = Query(...),
+        day: str = Query(...),
+        timezone_name: str = Query(..., alias="timezone"),
+        exercise_minutes: str | None = Query(default=None),
+        stand_minutes: str | None = Query(default=None),
+        active_energy_kcal: str | None = Query(default=None),
+        authorization: str | None = Header(default=None),
+    ) -> AppleHealthImportResult:
+        _authorize_health_ingest(authorization)
+        payload = AppleHealthDailyImport.model_validate(
+            {
+                "tenant_id": tenant_id,
+                "day": day,
+                "timezone": timezone_name,
+                "exercise_minutes": exercise_minutes,
+                "stand_minutes": stand_minutes,
+                "active_energy_kcal": active_energy_kcal,
+            }
+        )
+        return import_apple_health_daily(store, payload)
+
+    @app.get("/v1/events", response_model=list[ProgressEvent])
+    def events(
+        tenant_id: str = Query(...),
+        metric: str | None = Query(None),
+        limit: int = Query(100, ge=1, le=1000),
+    ) -> list[ProgressEvent]:
+        recorded = store.list_events(tenant_id)
+        if metric is not None:
+            recorded = [event for event in recorded if event.metric == metric]
+        return recorded[:limit]
 
     @app.get("/v1/progress", response_model=ProgressSummary)
     def progress(tenant_id: str = Query(...)) -> ProgressSummary:

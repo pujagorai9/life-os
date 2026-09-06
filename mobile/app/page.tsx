@@ -32,6 +32,7 @@ import {
   Sun,
   TriangleAlert,
   Utensils,
+  Watch,
   X,
 } from 'lucide-react';
 
@@ -149,6 +150,20 @@ type ProgressEvent = {
   confidence: number;
   metadata: Record<string, unknown>;
   occurred_at: string;
+};
+
+type WhoopStatus = {
+  configured: boolean;
+  connected: boolean;
+  scope: string[];
+  has_refresh_token: boolean;
+};
+
+type WhoopSyncResult = {
+  connected: boolean;
+  created_events: number;
+  skipped_existing: number;
+  imported_days: string[];
 };
 
 type RingMetric = {
@@ -1240,6 +1255,14 @@ export default function Home() {
   const [dailyEvents, setDailyEvents] = useState<ProgressEvent[]>([]);
   const [knowledgeRecords, setKnowledgeRecords] = useState<KnowledgeRecord[]>([]);
   const [progress, setProgress] = useState<ProgressSummary | null>(null);
+  const [whoopStatus, setWhoopStatus] = useState<WhoopStatus>({
+    configured: false,
+    connected: false,
+    scope: [],
+    has_refresh_token: false,
+  });
+  const [whoopBusy, setWhoopBusy] = useState(false);
+  const [whoopMessage, setWhoopMessage] = useState('');
   const [briefing, setBriefing] = useState<BriefingDocument | null>(null);
   const [briefingError, setBriefingError] = useState('');
   const [loadingBriefing, setLoadingBriefing] = useState(false);
@@ -1382,6 +1405,7 @@ export default function Home() {
         knowledgeData,
         financeData,
         financeAccountData,
+        whoopData,
       ] =
         await Promise.all([
           lifeOS<Agent[]>('/v1/agents'),
@@ -1402,6 +1426,7 @@ export default function Home() {
           lifeOS<FinanceEmailAccount[]>(
             `/v1/finance/accounts?tenant_id=${TENANT_ID}`,
           ),
+          lifeOS<WhoopStatus>('/v1/integrations/whoop/status'),
         ]);
       const cycleStart = goalData.reduce(
         (earliest, goal) =>
@@ -1427,6 +1452,7 @@ export default function Home() {
       setKnowledgeRecords(knowledgeData);
       setFinanceReport(financeData);
       setFinanceAccounts(financeAccountData);
+      setWhoopStatus(whoopData);
       setProgress(progressData);
     } catch (requestError) {
       setError(
@@ -1443,6 +1469,63 @@ export default function Home() {
     const timeout = window.setTimeout(() => void loadDashboard(), 0);
     return () => window.clearTimeout(timeout);
   }, [loadDashboard]);
+
+  const connectWhoop = async () => {
+    setWhoopBusy(true);
+    setWhoopMessage('');
+    try {
+      const authorization = await lifeOS<{ url: string }>(
+        '/v1/integrations/whoop/authorize',
+        { method: 'POST' },
+      );
+      window.location.assign(authorization.url);
+    } catch (requestError) {
+      setWhoopMessage(
+        requestError instanceof Error
+          ? requestError.message
+          : 'WHOOP connection could not begin.',
+      );
+      setWhoopBusy(false);
+    }
+  };
+
+  const syncWhoop = useCallback(async () => {
+    setWhoopBusy(true);
+    setWhoopMessage('');
+    try {
+      const result = await lifeOS<WhoopSyncResult>(
+        `/v1/integrations/whoop/sync?tenant_id=${TENANT_ID}&days=7`,
+        { method: 'POST' },
+      );
+      setWhoopMessage(
+        result.created_events
+          ? `WHOOP updated ${result.imported_days.length} day${result.imported_days.length === 1 ? '' : 's'}.`
+          : 'WHOOP is already up to date.',
+      );
+      await loadDashboard();
+    } catch (requestError) {
+      setWhoopMessage(
+        requestError instanceof Error
+          ? requestError.message
+          : 'WHOOP data could not be synced.',
+      );
+    } finally {
+      setWhoopBusy(false);
+    }
+  }, [loadDashboard]);
+
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    if (query.get('whoop') !== 'connected') return;
+    query.delete('whoop');
+    const suffix = query.toString();
+    window.history.replaceState(
+      {},
+      '',
+      `${window.location.pathname}${suffix ? `?${suffix}` : ''}`,
+    );
+    void syncWhoop();
+  }, [syncWhoop]);
 
   const briefingReviewed = dailyEvents.some(
     (event) => event.metric === 'briefing_reviewed' && event.value > 0,
@@ -4242,6 +4325,54 @@ or persistent, advise contacting a clinician or lactation professional.`;
     return (
       <>
         <PageHeader title="Your company" subtitle="Choose an agent to begin" />
+        <Card className="mt-5 border-0 bg-gradient-to-br from-zinc-950 to-zinc-800 text-white ring-white/10">
+          <CardContent className="py-5">
+            <div className="flex items-start gap-3">
+              <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-lime-300 text-zinc-950">
+                <Watch className="size-5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <p className="font-heading text-lg font-semibold">WHOOP</p>
+                  {whoopStatus.connected && (
+                    <span className="rounded-full bg-lime-300/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-lime-200">
+                      Connected
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-sm leading-5 text-zinc-300">
+                  Recovery, sleep, day strain, and workouts for your Fitness
+                  Coach.
+                </p>
+              </div>
+            </div>
+            <Button
+              className="mt-4 w-full rounded-xl bg-lime-300 text-zinc-950 hover:bg-lime-200"
+              disabled={whoopBusy || !whoopStatus.configured}
+              onClick={() =>
+                void (whoopStatus.connected ? syncWhoop() : connectWhoop())
+              }
+            >
+              {whoopBusy ? (
+                <LoaderCircle className="animate-spin" />
+              ) : whoopStatus.connected ? (
+                <RefreshCw />
+              ) : (
+                <Watch />
+              )}
+              {!whoopStatus.configured
+                ? 'Finish WHOOP setup'
+                : whoopStatus.connected
+                  ? 'Sync WHOOP now'
+                  : 'Connect WHOOP'}
+            </Button>
+            {whoopMessage && (
+              <p className="mt-3 text-xs leading-5 text-zinc-300">
+                {whoopMessage}
+              </p>
+            )}
+          </CardContent>
+        </Card>
         <Card className="mt-5 border-0 bg-card ring-border">
           <CardContent className="py-4">
             <div>
@@ -4844,7 +4975,11 @@ or persistent, advise contacting a clinician or lactation professional.`;
 
     const ouraMove = eventTotal('oura_active_calories');
     const ouraActivityScore = eventTotal('oura_activity_score');
-    const sleepHours = eventTotal('total_sleep_hours');
+    const whoopRecovery = eventTotal('whoop_recovery_score');
+    const whoopStrain = eventTotal('whoop_day_strain');
+    const whoopWorkoutMinutes = eventTotal('whoop_workout_minutes');
+    const whoopSleepHours = eventTotal('whoop_sleep_hours');
+    const sleepHours = whoopSleepHours || eventTotal('total_sleep_hours');
     const fitnessGoal = goals.find(
       (goal) => goal.owner_agent === 'fitness_coach',
     );
@@ -4867,7 +5002,7 @@ or persistent, advise contacting a clinician or lactation professional.`;
       },
       {
         label: 'Exercise',
-        value: workoutDone ? 30 : 0,
+        value: whoopWorkoutMinutes || (workoutDone ? 30 : 0),
         target: 30,
         unit: 'min',
         color: '#06b6d4',
@@ -4885,6 +5020,20 @@ or persistent, advise contacting a clinician or lactation professional.`;
         target: 7,
         unit: 'hr',
         color: '#6366f1',
+      },
+      {
+        label: 'Recovery',
+        value: whoopRecovery,
+        target: 100,
+        unit: 'score',
+        color: '#10b981',
+      },
+      {
+        label: 'Day strain',
+        value: whoopStrain,
+        target: 21,
+        unit: 'strain',
+        color: '#f97316',
       },
       {
         label: 'Kaju walk',
@@ -5046,8 +5195,8 @@ or persistent, advise contacting a clinician or lactation professional.`;
         metrics: fitnessMetrics,
         tint: 'from-cyan-50 to-indigo-50 dark:from-cyan-950/35 dark:to-indigo-950/25',
         note:
-          !ouraMove && !sleepHours
-            ? 'Oura active calories and sleep will appear after the ring syncs with Oura.'
+          !ouraMove && !sleepHours && !whoopRecovery
+            ? 'WHOOP recovery, sleep, strain, and workouts will appear after you connect and sync WHOOP. Oura data remains supported.'
             : undefined,
       },
       {

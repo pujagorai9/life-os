@@ -8,12 +8,13 @@ import os
 import re
 import secrets
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi.responses import RedirectResponse
 
 from life_os.agent_catalog import list_agents
 from life_os.analytics import build_progress_summary
@@ -197,9 +198,10 @@ def create_app(
     async def private_api_auth(request: Request, call_next):
         # Health checks remain accessible to the hosting platform. Apple Health
         # ingestion has its own narrowly scoped bearer token.
-        if request.url.path != "/health" and not request.url.path.startswith(
+        public_integration_path = request.url.path.startswith(
             "/v1/integrations/apple-health/"
-        ):
+        ) or request.url.path == "/v1/integrations/whoop/callback"
+        if request.url.path != "/health" and not public_integration_path:
             try:
                 _authorize_private_api(request)
             except HTTPException as error:
@@ -213,6 +215,88 @@ def create_app(
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/v1/integrations/whoop/status")
+    def whoop_status() -> dict[str, object]:
+        from life_os.connectors.whoop import WhoopConnector
+
+        try:
+            return WhoopConnector.from_environment().token_status()
+        except ValueError:
+            return {
+                "configured": False,
+                "connected": False,
+                "scope": [],
+                "has_refresh_token": False,
+            }
+
+    @app.post("/v1/integrations/whoop/authorize")
+    def authorize_whoop() -> dict[str, str]:
+        from life_os.connectors.whoop import WhoopConnector
+
+        try:
+            authorization = WhoopConnector.from_environment().begin_authorization()
+        except ValueError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        return {"url": authorization.url}
+
+    @app.get("/v1/integrations/whoop/callback")
+    def whoop_callback(
+        code: str = Query(""),
+        state: str = Query(""),
+        error: str = Query(""),
+    ) -> RedirectResponse:
+        from life_os.connectors.whoop import WhoopConnector
+
+        if error:
+            raise HTTPException(
+                status_code=400, detail=f"WHOOP authorization was declined: {error}"
+            )
+        if not code or not state:
+            raise HTTPException(
+                status_code=400, detail="WHOOP did not return an authorization code"
+            )
+        try:
+            WhoopConnector.from_environment().exchange_code(code, state)
+        except (ValueError, RuntimeError, httpx.HTTPError) as exchange_error:
+            raise HTTPException(
+                status_code=400, detail=str(exchange_error)
+            ) from exchange_error
+        return_url = os.getenv("WHOOP_RETURN_URL", "").strip()
+        if not return_url.startswith("https://"):
+            raise HTTPException(
+                status_code=500, detail="WHOOP_RETURN_URL is not configured"
+            )
+        separator = "&" if "?" in return_url else "?"
+        return RedirectResponse(
+            f"{return_url}{separator}whoop=connected", status_code=303
+        )
+
+    @app.post("/v1/integrations/whoop/sync")
+    def sync_whoop(
+        tenant_id: str = Query(...), days: int = Query(7, ge=1, le=31)
+    ) -> dict[str, object]:
+        from life_os.connectors.whoop import WhoopConnector
+        from life_os.whoop_sync import sync_whoop_daily
+
+        end_date = datetime.now(user_timezone).date()
+        start_date = end_date - timedelta(days=days - 1)
+        try:
+            return sync_whoop_daily(
+                store,
+                WhoopConnector.from_environment(),
+                tenant_id,
+                start_date,
+                end_date,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except httpx.HTTPError as error:
+            raise HTTPException(
+                status_code=502, detail="WHOOP could not be reached"
+            ) from error
 
     @app.get("/v1/agents", response_model=list[AgentDefinition])
     def agents() -> list[AgentDefinition]:

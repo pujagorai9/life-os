@@ -124,6 +124,11 @@ def main() -> None:
     )
     oura_sync.add_argument("--tenant", default="me")
     oura_sync.add_argument("--days", type=int, default=2)
+    whoop_sync = subcommands.add_parser(
+        "whoop-sync", help="Import recent WHOOP recovery, sleep, strain, and workout data"
+    )
+    whoop_sync.add_argument("--tenant", default="me")
+    whoop_sync.add_argument("--days", type=int, default=7)
     health_token = subcommands.add_parser(
         "apple-health-token",
         help="Create the private bearer token used by an Apple Health Shortcut",
@@ -195,6 +200,23 @@ def main() -> None:
         result = sync_oura_daily(
             LifeOSStore(os.getenv("LIFE_OS_DATABASE", "life_os.db")),
             OuraConnector.from_environment(),
+            args.tenant,
+            start_date,
+            end_date,
+        )
+        print(json.dumps(result, indent=2))
+    elif args.command == "whoop-sync":
+        from life_os.connectors.whoop import WhoopConnector
+        from life_os.store import LifeOSStore
+        from life_os.whoop_sync import sync_whoop_daily
+
+        if args.days < 1 or args.days > 31:
+            raise ValueError("--days must be between 1 and 31")
+        end_date = date.today()
+        start_date = end_date - timedelta(days=args.days - 1)
+        result = sync_whoop_daily(
+            LifeOSStore(os.getenv("LIFE_OS_DATABASE", "life_os.db")),
+            WhoopConnector.from_environment(),
             args.tenant,
             start_date,
             end_date,

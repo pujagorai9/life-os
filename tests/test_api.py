@@ -72,6 +72,35 @@ def test_pumping_events_replace_the_same_scheduled_slot(tmp_path: Path) -> None:
     ]
 
 
+def test_phone_notification_preferences_are_saved_per_subscription(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("LIFE_OS_VAPID_PUBLIC_KEY", "public-key")
+    monkeypatch.setenv("LIFE_OS_VAPID_PRIVATE_KEY", "private-key")
+    database = tmp_path / "api.db"
+    client = TestClient(create_app(database))
+
+    assert client.get("/v1/notifications/config").json() == {
+        "configured": True,
+        "public_key": "public-key",
+    }
+    response = client.post(
+        "/v1/notifications/subscriptions",
+        json={
+            "tenant_id": "tenant-a",
+            "endpoint": "https://push.example/subscription-a",
+            "keys": {"p256dh": "device-public-key", "auth": "device-auth"},
+            "notification_keys": ["goal-a:prompt-a"],
+            "timezone": "America/Los_Angeles",
+        },
+    )
+
+    assert response.status_code == 200
+    saved = LifeOSStore(database).list_push_subscriptions()
+    assert len(saved) == 1
+    assert saved[0].notification_keys == ["goal-a:prompt-a"]
+
+
 def test_finance_email_results_build_a_private_daily_report(
     tmp_path: Path, monkeypatch
 ) -> None:

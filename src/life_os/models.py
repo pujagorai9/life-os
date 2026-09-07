@@ -496,6 +496,29 @@ class ProgressEvent(ProgressEventCreate):
     id: str
 
 
+class PushSubscriptionKeys(BaseModel):
+    p256dh: str = Field(min_length=1)
+    auth: str = Field(min_length=1)
+
+
+class PushSubscriptionCreate(BaseModel):
+    tenant_id: str
+    endpoint: str = Field(min_length=1)
+    keys: PushSubscriptionKeys
+    notification_keys: list[str] = Field(default_factory=list)
+    timezone: str = "UTC"
+
+
+class PushSubscription(PushSubscriptionCreate):
+    id: str
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class PushSubscriptionDelete(BaseModel):
+    tenant_id: str
+    endpoint: str = Field(min_length=1)
+
+
 class BriefingDocument(BaseModel):
     day: date
     title: str

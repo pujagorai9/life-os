@@ -6,6 +6,8 @@ import Image from 'next/image';
 import {
   ArrowLeft,
   BarChart3,
+  Bell,
+  BellRing,
   BookOpen,
   Bot,
   BriefcaseBusiness,
@@ -151,6 +153,11 @@ type ProgressEvent = {
   confidence: number;
   metadata: Record<string, unknown>;
   occurred_at: string;
+};
+
+type NotificationConfig = {
+  configured: boolean;
+  public_key: string;
 };
 
 type WhoopStatus = {
@@ -356,6 +363,7 @@ type CheckInPhoto = {
 
 const TENANT_ID = process.env.NEXT_PUBLIC_LIFE_OS_TENANT_ID || 'me';
 const RESUME_STATE_KEY = `life-os-resume:${TENANT_ID}`;
+const NOTIFICATION_KEYS_STORAGE_KEY = `life-os-notifications:${TENANT_ID}`;
 const LIFE_OS_START_DAY = '2026-08-30';
 
 const todayKey = () => {
@@ -523,6 +531,17 @@ const supportsPrivateAttachment = (checkIn?: CheckIn) =>
 const isPumpingCheckIn = (checkIn?: CheckIn) =>
   checkIn?.agent_id === 'operations_manager' &&
   checkIn.prompt.toLowerCase().includes('how much did you pump');
+
+const checkInNotificationKey = (checkIn: CheckIn) =>
+  `${checkIn.goal_id}:${checkIn.prompt_id}`;
+
+const pushKeyBytes = (value: string) => {
+  const padding = '='.repeat((4 - (value.length % 4)) % 4);
+  const base64 = (value + padding).replace(/-/g, '+').replace(/_/g, '/');
+  return Uint8Array.from(window.atob(base64), (character) =>
+    character.charCodeAt(0),
+  );
+};
 
 const usesInputLogging = (checkIn: CheckIn) => {
   if (checkIn.input_required !== null && checkIn.input_required !== undefined) {
@@ -1296,6 +1315,12 @@ export default function Home() {
   const [chatting, setChatting] = useState(false);
   const [checkInResponse, setCheckInResponse] = useState('');
   const [pumpingMinutes, setPumpingMinutes] = useState('');
+  const [notificationPermission, setNotificationPermission] = useState<
+    NotificationPermission | 'unsupported'
+  >('default');
+  const [notificationKeys, setNotificationKeys] = useState<string[]>([]);
+  const [notificationBusy, setNotificationBusy] = useState(false);
+  const [notificationMessage, setNotificationMessage] = useState('');
   const [savingCheckIn, setSavingCheckIn] = useState(false);
   const [logConfirmation, setLogConfirmation] =
     useState<LogConfirmation | null>(null);
@@ -1359,6 +1384,24 @@ export default function Home() {
     };
     colorScheme.addEventListener('change', syncSystemTheme);
     return () => colorScheme.removeEventListener('change', syncSystemTheme);
+  }, []);
+
+  useEffect(() => {
+    if (!('Notification' in window) || !('serviceWorker' in navigator)) {
+      setNotificationPermission('unsupported');
+      return;
+    }
+    setNotificationPermission(Notification.permission);
+    try {
+      const saved = JSON.parse(
+        window.localStorage.getItem(NOTIFICATION_KEYS_STORAGE_KEY) || '[]',
+      );
+      if (Array.isArray(saved)) {
+        setNotificationKeys(saved.filter((value) => typeof value === 'string'));
+      }
+    } catch {
+      setNotificationKeys([]);
+    }
   }, []);
 
   const chooseTheme = (preference: ThemePreference) => {
@@ -2736,6 +2779,94 @@ or persistent, advise contacting a clinician or lactation professional.`;
     }
   };
 
+  const syncNotificationSubscription = async (keys: string[]) => {
+    if (!('Notification' in window) || !('serviceWorker' in navigator)) {
+      throw new Error('Notifications are not supported on this device.');
+    }
+    const config = await lifeOS<NotificationConfig>('/v1/notifications/config');
+    if (!config.configured || !config.public_key) {
+      throw new Error('Phone notifications are not ready yet.');
+    }
+    const permission =
+      Notification.permission === 'granted'
+        ? 'granted'
+        : await Notification.requestPermission();
+    setNotificationPermission(permission);
+    if (permission !== 'granted') {
+      throw new Error('Notification permission was not granted.');
+    }
+    await navigator.serviceWorker.register('/sw.js');
+    const registration = await navigator.serviceWorker.ready;
+    const current = await registration.pushManager.getSubscription();
+    const subscription =
+      current ||
+      (await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: pushKeyBytes(config.public_key),
+      }));
+    const saved = subscription.toJSON();
+    if (!saved.endpoint || !saved.keys?.p256dh || !saved.keys.auth) {
+      throw new Error('This phone could not create a notification subscription.');
+    }
+    await lifeOS('/v1/notifications/subscriptions', {
+      method: 'POST',
+      body: JSON.stringify({
+        tenant_id: TENANT_ID,
+        endpoint: saved.endpoint,
+        keys: saved.keys,
+        notification_keys: keys,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+      }),
+    });
+    window.localStorage.setItem(
+      NOTIFICATION_KEYS_STORAGE_KEY,
+      JSON.stringify(keys),
+    );
+  };
+
+  const enableNotifications = async () => {
+    setNotificationBusy(true);
+    setNotificationMessage('');
+    try {
+      await syncNotificationSubscription(notificationKeys);
+      setNotificationMessage('Notifications are enabled. Choose tasks below.');
+    } catch (notificationError) {
+      setNotificationMessage(
+        notificationError instanceof Error
+          ? notificationError.message
+          : 'Notifications could not be enabled.',
+      );
+    } finally {
+      setNotificationBusy(false);
+    }
+  };
+
+  const toggleTaskNotification = async (checkIn: CheckIn) => {
+    const key = checkInNotificationKey(checkIn);
+    const nextKeys = notificationKeys.includes(key)
+      ? notificationKeys.filter((item) => item !== key)
+      : [...notificationKeys, key];
+    setNotificationBusy(true);
+    setNotificationMessage('');
+    try {
+      await syncNotificationSubscription(nextKeys);
+      setNotificationKeys(nextKeys);
+      setNotificationMessage(
+        nextKeys.includes(key)
+          ? `Notifications enabled for ${shortTaskTitle(checkIn)}.`
+          : `Notifications turned off for ${shortTaskTitle(checkIn)}.`,
+      );
+    } catch (notificationError) {
+      setNotificationMessage(
+        notificationError instanceof Error
+          ? notificationError.message
+          : 'That notification preference could not be saved.',
+      );
+    } finally {
+      setNotificationBusy(false);
+    }
+  };
+
   const renderToday = () => (
     <>
       <DatedPageHeader
@@ -2804,6 +2935,47 @@ or persistent, advise contacting a clinician or lactation professional.`;
         </CardContent>
       </Card>
 
+      {viewingToday && (
+        <Card className="mt-4 border-0 bg-card ring-border">
+          <CardContent className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                {notificationPermission === 'granted' ? <BellRing /> : <Bell />}
+              </span>
+              <div>
+                <p className="font-semibold">Task notifications</p>
+                <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                  {notificationPermission === 'granted'
+                    ? `${notificationKeys.length} task${notificationKeys.length === 1 ? '' : 's'} selected`
+                    : 'Get an alert when selected tasks are due.'}
+                </p>
+              </div>
+            </div>
+            {notificationPermission !== 'granted' && (
+              <Button
+                className="h-10 shrink-0 rounded-xl"
+                disabled={
+                  notificationBusy || notificationPermission === 'unsupported'
+                }
+                onClick={() => void enableNotifications()}
+              >
+                {notificationBusy ? (
+                  <LoaderCircle className="animate-spin" />
+                ) : (
+                  <Bell />
+                )}
+                Enable
+              </Button>
+            )}
+          </CardContent>
+          {notificationMessage && (
+            <p className="px-6 pb-4 text-xs leading-5 text-muted-foreground">
+              {notificationMessage}
+            </p>
+          )}
+        </Card>
+      )}
+
       <section className="mt-7" aria-labelledby="today-heading">
         <div className="mb-3 flex items-end justify-between">
           <div>
@@ -2833,20 +3005,40 @@ or persistent, advise contacting a clinician or lactation professional.`;
               .slice(0, showFullPlan ? userCheckIns.length : 4)
               .map((item) => {
                 const goal = goals.find((goal) => goal.id === item.goal_id);
+                const notificationsOn = notificationKeys.includes(
+                  checkInNotificationKey(item),
+                );
                 return (
-                  <AgendaCard
-                    key={item.id}
-                    sideLabel="By"
-                    sideValue={deliveryTime(item.due_at)}
-                    title={shortTaskTitle(item)}
-                    description={boundedDescription(
-                      compactTaskScope(item, goal),
+                  <div key={item.id}>
+                    <AgendaCard
+                      sideLabel="By"
+                      sideValue={deliveryTime(item.due_at)}
+                      title={shortTaskTitle(item)}
+                      description={boundedDescription(
+                        compactTaskScope(item, goal),
+                      )}
+                      onClick={() => {
+                        setSelectedCheckInId(item.id);
+                        setView('check-in');
+                      }}
+                    />
+                    {notificationPermission === 'granted' && (
+                      <button
+                        type="button"
+                        className={`ml-auto mt-1.5 flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ${notificationsOn ? 'bg-primary/10 text-primary' : 'text-muted-foreground'}`}
+                        disabled={notificationBusy}
+                        aria-pressed={notificationsOn}
+                        onClick={() => void toggleTaskNotification(item)}
+                      >
+                        {notificationsOn ? (
+                          <BellRing className="size-3.5" />
+                        ) : (
+                          <Bell className="size-3.5" />
+                        )}
+                        {notificationsOn ? 'Notification on' : 'Notify me'}
+                      </button>
                     )}
-                    onClick={() => {
-                      setSelectedCheckInId(item.id);
-                      setView('check-in');
-                    }}
-                  />
+                  </div>
                 );
               })}
           </div>

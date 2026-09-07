@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hashlib
@@ -8,6 +9,7 @@ import os
 import re
 import secrets
 import uuid
+from contextlib import asynccontextmanager, suppress
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -81,6 +83,9 @@ from life_os.models import (
     ProgressEvent,
     ProgressEventCreate,
     ProgressSummary,
+    PushSubscription,
+    PushSubscriptionCreate,
+    PushSubscriptionDelete,
     ScheduledCheckIn,
     TrackingProtocol,
     TrackingProtocolApproval,
@@ -95,6 +100,7 @@ from life_os.photo_analysis import (
 )
 from life_os.store import LifeOSStore
 from life_os.apple_health import import_apple_health_daily
+from life_os.notifications import notifications_configured, send_due_notifications
 
 
 MAX_PHOTO_BYTES = 12 * 1024 * 1024
@@ -171,7 +177,6 @@ def create_app(
     appointment_ledger_path: str | Path | None = None,
     gmail_accounts_path: str | Path | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="Life OS", version="0.4.0")
     store = LifeOSStore(database or os.getenv("LIFE_OS_DATABASE", "life_os.db"))
     profile = load_profile()
     runtime = LifeOS(store=store, profile=profile)
@@ -194,6 +199,26 @@ def create_app(
         )
     except ZoneInfoNotFoundError:
         user_timezone = ZoneInfo("UTC")
+
+    async def notification_worker() -> None:
+        while True:
+            await asyncio.to_thread(send_due_notifications, store, utc_now())
+            await asyncio.sleep(30)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        notification_task: asyncio.Task[None] | None = None
+        if notifications_configured():
+            notification_task = asyncio.create_task(notification_worker())
+        try:
+            yield
+        finally:
+            if notification_task:
+                notification_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await notification_task
+
+    app = FastAPI(title="Life OS", version="0.5.0", lifespan=lifespan)
 
     @app.middleware("http")
     async def private_api_auth(request: Request, call_next):
@@ -984,6 +1009,26 @@ def create_app(
             event, _ = store.upsert_event_by_occurrence(request)
             return event
         return store.create_event(request)
+
+    @app.get("/v1/notifications/config")
+    def notification_config() -> dict[str, str | bool]:
+        return {
+            "configured": notifications_configured(),
+            "public_key": os.getenv("LIFE_OS_VAPID_PUBLIC_KEY", "").strip(),
+        }
+
+    @app.post("/v1/notifications/subscriptions", response_model=PushSubscription)
+    def save_push_subscription(
+        request: PushSubscriptionCreate,
+    ) -> PushSubscription:
+        if not notifications_configured():
+            raise HTTPException(status_code=503, detail="Notifications are not configured")
+        return store.upsert_push_subscription(request)
+
+    @app.delete("/v1/notifications/subscriptions", status_code=204)
+    def delete_push_subscription(request: PushSubscriptionDelete) -> Response:
+        store.delete_push_subscription(request.tenant_id, request.endpoint)
+        return Response(status_code=204)
 
     @app.post(
         "/v1/integrations/apple-health/import",

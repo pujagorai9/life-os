@@ -37,6 +37,8 @@ from life_os.models import (
     OnboardingSelection,
     ProgressEvent,
     ProgressEventCreate,
+    PushSubscription,
+    PushSubscriptionCreate,
     ScheduledCheckIn,
     TrackingProtocol,
     utc_now,
@@ -89,6 +91,23 @@ class LifeOSStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_events_tenant
                     ON progress_events (tenant_id, occurred_at);
+
+                CREATE TABLE IF NOT EXISTS push_subscriptions (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    endpoint TEXT NOT NULL UNIQUE,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_push_subscriptions_tenant
+                    ON push_subscriptions (tenant_id);
+
+                CREATE TABLE IF NOT EXISTS push_deliveries (
+                    subscription_id TEXT NOT NULL,
+                    check_in_id TEXT NOT NULL,
+                    delivered_at TEXT NOT NULL,
+                    PRIMARY KEY (subscription_id, check_in_id)
+                );
 
                 CREATE TABLE IF NOT EXISTS memories (
                     id TEXT PRIMARY KEY,
@@ -1168,6 +1187,78 @@ class LifeOSStore:
                 (tenant_id,),
             ).fetchall()
         return [_event(row) for row in rows]
+
+    def upsert_push_subscription(
+        self, request: PushSubscriptionCreate
+    ) -> PushSubscription:
+        now = utc_now()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT id FROM push_subscriptions WHERE endpoint = ?",
+                (request.endpoint,),
+            ).fetchone()
+            subscription = PushSubscription(
+                id=row["id"] if row else str(uuid.uuid4()),
+                updated_at=now,
+                **request.model_dump(),
+            )
+            connection.execute(
+                """INSERT INTO push_subscriptions
+                   (id, tenant_id, endpoint, payload, updated_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(endpoint) DO UPDATE SET
+                     tenant_id = excluded.tenant_id,
+                     payload = excluded.payload,
+                     updated_at = excluded.updated_at""",
+                (
+                    subscription.id,
+                    subscription.tenant_id,
+                    subscription.endpoint,
+                    _json(subscription),
+                    _iso(subscription.updated_at),
+                ),
+            )
+        return subscription
+
+    def list_push_subscriptions(self) -> list[PushSubscription]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload FROM push_subscriptions ORDER BY updated_at DESC"
+            ).fetchall()
+        return [PushSubscription.model_validate_json(row["payload"]) for row in rows]
+
+    def delete_push_subscription(self, tenant_id: str, endpoint: str) -> None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT id FROM push_subscriptions WHERE tenant_id = ? AND endpoint = ?",
+                (tenant_id, endpoint),
+            ).fetchone()
+            if row:
+                connection.execute(
+                    "DELETE FROM push_deliveries WHERE subscription_id = ?",
+                    (row["id"],),
+                )
+                connection.execute(
+                    "DELETE FROM push_subscriptions WHERE id = ?",
+                    (row["id"],),
+                )
+
+    def push_was_delivered(self, subscription_id: str, check_in_id: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT 1 FROM push_deliveries
+                   WHERE subscription_id = ? AND check_in_id = ?""",
+                (subscription_id, check_in_id),
+            ).fetchone()
+        return row is not None
+
+    def mark_push_delivered(self, subscription_id: str, check_in_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT OR IGNORE INTO push_deliveries
+                   (subscription_id, check_in_id, delivered_at) VALUES (?, ?, ?)""",
+                (subscription_id, check_in_id, _iso(utc_now())),
+            )
 
     def propose_memory(self, request: MemoryCreate) -> Memory:
         memory = Memory(id=str(uuid.uuid4()), **request.model_dump())

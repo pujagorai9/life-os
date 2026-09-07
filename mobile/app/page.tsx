@@ -56,6 +56,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
+import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 
 type View =
@@ -518,6 +519,10 @@ const supportsPrivateAttachment = (checkIn?: CheckIn) =>
   checkIn?.agent_id === 'knowledge_guru' ||
   checkIn?.agent_id === 'career_coach';
 
+const isPumpingCheckIn = (checkIn?: CheckIn) =>
+  checkIn?.agent_id === 'operations_manager' &&
+  checkIn.prompt.toLowerCase().includes('how much did you pump');
+
 const usesInputLogging = (checkIn: CheckIn) => {
   if (checkIn.input_required !== null && checkIn.input_required !== undefined) {
     return checkIn.input_required;
@@ -532,7 +537,8 @@ const usesInputLogging = (checkIn: CheckIn) => {
     prompt.startsWith('how did this commitment cycle feel') ||
     prompt.includes('record total sleep') ||
     prompt.includes('record weight') ||
-    prompt.includes('feed log')
+    prompt.includes('feed log') ||
+    isPumpingCheckIn(checkIn)
   );
 };
 
@@ -878,11 +884,13 @@ function MetricRows({ metrics }: { metrics: RingMetric[] }) {
             </div>
             <div className="shrink-0 text-right">
               <p className="text-sm font-bold tabular-nums">
-                {formatMetricNumber(metric.value)} /{' '}
-                {metric.targetLabel ||
-                  (metric.target === null
-                    ? 'Target not set'
-                    : formatMetricNumber(metric.target))}{' '}
+                {formatMetricNumber(metric.value)}
+                {metric.target !== null && (
+                  <>
+                    {' / '}
+                    {metric.targetLabel || formatMetricNumber(metric.target)}
+                  </>
+                )}{' '}
                 {metric.unit}
               </p>
               {percent !== null && (
@@ -2159,6 +2167,21 @@ export default function Home() {
     responseOverride?: string,
   ) => {
     if (!activeCheckIn) return;
+    const response = (responseOverride ?? checkInResponse).trim();
+    const pumpingMl = isPumpingCheckIn(activeCheckIn)
+      ? Number(response)
+      : null;
+    if (
+      outcome !== 'skipped' &&
+      isPumpingCheckIn(activeCheckIn) &&
+      (!response ||
+        !Number.isFinite(pumpingMl) ||
+        pumpingMl <= 0 ||
+        pumpingMl > 2000)
+    ) {
+      setError('Enter the amount pumped in ml before saving.');
+      return;
+    }
     setSavingCheckIn(true);
     setError('');
     try {
@@ -2205,6 +2228,34 @@ export default function Home() {
             },
           }),
         });
+        if (pumpingMl !== null) {
+          await lifeOS('/v1/events', {
+            method: 'POST',
+            body: JSON.stringify({
+              tenant_id: TENANT_ID,
+              domain: 'operations_manager',
+              metric: 'pumping_ml',
+              value: pumpingMl,
+              unit: 'ml',
+              source: 'mobile_user_confirmation',
+              confidence: 1,
+              occurred_at: activeCheckIn.due_at,
+              goal_id: activeCheckIn.goal_id,
+              metadata: {
+                check_in_id: activeCheckIn.id,
+                prompt_id: activeCheckIn.prompt_id,
+                tracked_day: selectedDay,
+                scheduled_time: new Date(
+                  activeCheckIn.due_at,
+                ).toLocaleTimeString([], {
+                  hour: 'numeric',
+                  minute: '2-digit',
+                }),
+                logged_at: new Date().toISOString(),
+              },
+            }),
+          });
+        }
         if (
           activeCheckIn.agent_id === 'nutrition_coach' &&
           !isNutritionReview(activeCheckIn) &&
@@ -4017,18 +4068,40 @@ or persistent, advise contacting a clinician or lactation professional.`;
                             </p>
                           </div>
                         )}
-                        <Textarea
-                          value={checkInResponse}
-                          onChange={(event) =>
-                            setCheckInResponse(event.target.value)
-                          }
-                          placeholder={
-                            activeCheckIn.agent_id === 'nutrition_coach'
-                              ? 'Example: Two eggs, one small roti, vegetables, and about 25 g cheese…'
-                              : 'Add a short note, measurement, or reflection…'
-                          }
-                          className="min-h-28 bg-background"
-                        />
+                        {isPumpingCheckIn(activeCheckIn) ? (
+                          <div className="relative">
+                            <Input
+                              type="number"
+                              inputMode="decimal"
+                              min="1"
+                              max="2000"
+                              step="1"
+                              value={checkInResponse}
+                              onChange={(event) =>
+                                setCheckInResponse(event.target.value)
+                              }
+                              placeholder="Amount pumped"
+                              aria-label="Amount pumped in millilitres"
+                              className="h-14 rounded-2xl bg-background pr-14 text-lg tabular-nums"
+                            />
+                            <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-sm font-semibold text-muted-foreground">
+                              ml
+                            </span>
+                          </div>
+                        ) : (
+                          <Textarea
+                            value={checkInResponse}
+                            onChange={(event) =>
+                              setCheckInResponse(event.target.value)
+                            }
+                            placeholder={
+                              activeCheckIn.agent_id === 'nutrition_coach'
+                                ? 'Example: Two eggs, one small roti, vegetables, and about 25 g cheese…'
+                                : 'Add a short note, measurement, or reflection…'
+                            }
+                            className="min-h-28 bg-background"
+                          />
+                        )}
                         {activeCheckIn.agent_id === 'nutrition_coach' && (
                           <Button
                             className="mt-3 h-11 w-full rounded-xl"
@@ -5086,9 +5159,9 @@ or persistent, advise contacting a clinician or lactation professional.`;
       },
       {
         label: 'Pumping',
-        value: taskWasDone('operations_manager', 'pumping session') ? 1 : 0,
-        target: 1,
-        unit: 'session',
+        value: eventTotal('pumping_ml'),
+        target: null,
+        unit: 'ml',
         color: '#f59e0b',
       },
       {

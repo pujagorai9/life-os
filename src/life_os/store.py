@@ -15,6 +15,8 @@ from life_os.models import (
     CheckInStatus,
     CheckInOutcome,
     CheckInPhoto,
+    BriefingDocument,
+    BriefingDocumentCreate,
     ExpenseRecord,
     FinanceCategoryTotal,
     FinanceCurrencySummary,
@@ -226,8 +228,53 @@ class LifeOSStore:
                     ON expense_records (tenant_id, source_message_id);
                 CREATE INDEX IF NOT EXISTS idx_expense_records_time
                     ON expense_records (tenant_id, transaction_at);
+
+                CREATE TABLE IF NOT EXISTS briefing_documents (
+                    tenant_id TEXT NOT NULL,
+                    day TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (tenant_id, day)
+                );
+                CREATE INDEX IF NOT EXISTS idx_briefing_documents_day
+                    ON briefing_documents (tenant_id, day DESC);
                 """
             )
+            connection.execute("PRAGMA optimize")
+
+    def save_briefing(self, request: BriefingDocumentCreate) -> BriefingDocument:
+        document = BriefingDocument(
+            day=request.day,
+            title=request.title.strip(),
+            markdown=request.markdown.strip(),
+            source_file=request.source_file.strip(),
+        )
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO briefing_documents (tenant_id, day, payload, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(tenant_id, day) DO UPDATE SET
+                     payload = excluded.payload,
+                     updated_at = excluded.updated_at""",
+                (
+                    request.tenant_id,
+                    request.day.isoformat(),
+                    _json(document),
+                    _iso(utc_now()),
+                ),
+            )
+        return document
+
+    def get_briefing(self, tenant_id: str, day: date) -> BriefingDocument:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT payload FROM briefing_documents
+                   WHERE tenant_id = ? AND day = ?""",
+                (tenant_id, day.isoformat()),
+            ).fetchone()
+        if row is None:
+            raise KeyError("Briefing not found")
+        return BriefingDocument.model_validate_json(row["payload"])
 
     def save_finance_email_result(
         self, request: FinanceEmailResultCreate

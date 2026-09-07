@@ -39,6 +39,7 @@ from life_os.models import (
     AppleHealthDailyImport,
     AppleHealthImportResult,
     BriefingDocument,
+    BriefingDocumentCreate,
     ChatRequest,
     Commitment,
     CommitmentCreate,
@@ -332,10 +333,14 @@ def create_app(
 
     @app.get("/v1/briefings/{day}", response_model=BriefingDocument)
     def briefing(day: date, tenant_id: str = Query(...)) -> BriefingDocument:
-        # The public app supplies the interface; briefing files remain in the
-        # tenant's ignored private directory on their own Life OS host.
         if not tenant_id.strip():
             raise HTTPException(status_code=422, detail="tenant_id is required")
+        try:
+            return store.get_briefing(tenant_id, day)
+        except KeyError:
+            pass
+        # Legacy local briefings remain readable while new cloud briefings are
+        # stored in the tenant-scoped database.
         candidates = sorted(private_briefings.glob(f"{day.isoformat()}*.md"))
         if not candidates:
             raise HTTPException(status_code=404, detail="Briefing is not available yet")
@@ -356,6 +361,10 @@ def create_app(
             markdown=markdown,
             source_file=source.name,
         )
+
+    @app.post("/v1/briefings", response_model=BriefingDocument)
+    def save_briefing(request: BriefingDocumentCreate) -> BriefingDocument:
+        return store.save_briefing(request)
 
     @app.get(
         "/v1/appointment-syncs/{day}", response_model=AppointmentSyncDocument

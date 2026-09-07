@@ -503,6 +503,14 @@ class BriefingDocument(BaseModel):
     source_file: str
 
 
+class BriefingDocumentCreate(BaseModel):
+    tenant_id: str = Field(min_length=1)
+    day: date
+    title: str = Field(min_length=1, max_length=300)
+    markdown: str = Field(min_length=1, max_length=512 * 1024)
+    source_file: str = Field(default="cloud-briefing", min_length=1, max_length=255)
+
+
 class AppointmentSyncItem(BaseModel):
     action: str
     outcome: str

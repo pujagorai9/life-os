@@ -131,6 +131,30 @@ def test_private_briefing_is_available_by_day(tmp_path: Path) -> None:
     assert missing.status_code == 404
 
 
+def test_cloud_briefing_is_saved_by_tenant_and_day(tmp_path: Path) -> None:
+    client = TestClient(create_app(tmp_path / "api.db"))
+    payload = {
+        "tenant_id": "me",
+        "day": "2026-09-07",
+        "title": "Daily Briefing — September 7, 2026",
+        "markdown": "# Daily Briefing — September 7, 2026\n\n## One update\n\nWhy it matters.",
+        "source_file": "daily-automation",
+    }
+
+    saved = client.post("/v1/briefings", json=payload)
+    assert saved.status_code == 200
+    assert saved.json()["title"] == payload["title"]
+
+    response = client.get("/v1/briefings/2026-09-07", params={"tenant_id": "me"})
+    assert response.status_code == 200
+    assert response.json()["markdown"] == payload["markdown"]
+
+    missing_tenant = client.get(
+        "/v1/briefings/2026-09-07", params={"tenant_id": "another-user"}
+    )
+    assert missing_tenant.status_code == 404
+
+
 def test_private_appointment_sync_is_available_by_local_day(
     tmp_path: Path, monkeypatch
 ) -> None:

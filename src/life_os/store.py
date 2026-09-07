@@ -1102,6 +1102,65 @@ class LifeOSStore:
             )
         return event, "updated"
 
+    def upsert_event_by_occurrence(
+        self, request: ProgressEventCreate
+    ) -> tuple[ProgressEvent, str]:
+        """Keep one user-entered measurement for an exact scheduled instant."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT rowid, * FROM progress_events
+                   WHERE tenant_id = ? AND metric = ? AND occurred_at = ?
+                   ORDER BY rowid DESC""",
+                (request.tenant_id, request.metric, _iso(request.occurred_at)),
+            ).fetchall()
+            if not rows:
+                event = ProgressEvent(id=str(uuid.uuid4()), **request.model_dump())
+                connection.execute(
+                    """INSERT INTO progress_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        event.id,
+                        event.tenant_id,
+                        event.domain,
+                        event.metric,
+                        event.value,
+                        event.unit,
+                        event.source,
+                        event.confidence,
+                        _iso(event.occurred_at),
+                        event.goal_id,
+                        json.dumps(event.metadata),
+                    ),
+                )
+                return event, "created"
+
+            current = _event(rows[0])
+            event = ProgressEvent(id=current.id, **request.model_dump())
+            connection.execute(
+                """UPDATE progress_events
+                   SET domain = ?, value = ?, unit = ?, source = ?, confidence = ?,
+                       occurred_at = ?, goal_id = ?, metadata = ?
+                   WHERE id = ?""",
+                (
+                    event.domain,
+                    event.value,
+                    event.unit,
+                    event.source,
+                    event.confidence,
+                    _iso(event.occurred_at),
+                    event.goal_id,
+                    json.dumps(event.metadata),
+                    event.id,
+                ),
+            )
+            duplicate_ids = [row["id"] for row in rows[1:]]
+            if duplicate_ids:
+                connection.executemany(
+                    "DELETE FROM progress_events WHERE id = ?",
+                    [(event_id,) for event_id in duplicate_ids],
+                )
+            action = "updated" if duplicate_ids or current != event else "unchanged"
+        return event, action
+
     def list_events(self, tenant_id: str) -> list[ProgressEvent]:
         with self._connect() as connection:
             rows = connection.execute(

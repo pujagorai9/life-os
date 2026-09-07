@@ -41,6 +41,37 @@ def test_private_api_token_protects_cloud_routes(
     )
 
 
+def test_pumping_events_replace_the_same_scheduled_slot(tmp_path: Path) -> None:
+    client = TestClient(create_app(tmp_path / "api.db"))
+    event = {
+        "tenant_id": "tenant-a",
+        "domain": "operations_manager",
+        "metric": "pumping_ml",
+        "value": 130,
+        "unit": "ml",
+        "source": "mobile_user_confirmation",
+        "confidence": 1,
+        "occurred_at": "2030-01-01T09:30:00-08:00",
+        "metadata": {"scheduled_time": "9:30 AM"},
+    }
+
+    first = client.post("/v1/events", json=event)
+    replacement = client.post("/v1/events", json={**event, "value": 145})
+    next_slot = client.post(
+        "/v1/events",
+        json={**event, "value": 120, "occurred_at": "2030-01-01T12:30:00-08:00"},
+    )
+
+    assert first.status_code == replacement.status_code == next_slot.status_code == 200
+    events = client.get(
+        "/v1/events", params={"tenant_id": "tenant-a", "metric": "pumping_ml"}
+    ).json()
+    assert [(item["occurred_at"], item["value"]) for item in events] == [
+        ("2030-01-01T12:30:00-08:00", 120),
+        ("2030-01-01T09:30:00-08:00", 145),
+    ]
+
+
 def test_finance_email_results_build_a_private_daily_report(
     tmp_path: Path, monkeypatch
 ) -> None:

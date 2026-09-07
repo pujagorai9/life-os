@@ -5020,10 +5020,29 @@ or persistent, advise contacting a clinician or lactation professional.`;
   );
 
   const renderProgress = () => {
-    const eventTotal = (metric: string) =>
-      dailyEvents
-        .filter((event) => event.metric === metric)
-        .reduce((total, event) => total + event.value, 0);
+    const eventTotal = (metric: string) => {
+      const matchingEvents = dailyEvents.filter(
+        (event) => event.metric === metric,
+      );
+      if (metric !== 'pumping_ml' && metric !== 'pumping_minutes') {
+        return matchingEvents.reduce((total, event) => total + event.value, 0);
+      }
+      const latestByScheduledTime = new Map<string, ProgressEvent>();
+      matchingEvents.forEach((event) => {
+        const existing = latestByScheduledTime.get(event.occurred_at);
+        const loggedAt = Date.parse(String(event.metadata.logged_at || '')) || 0;
+        const existingLoggedAt = existing
+          ? Date.parse(String(existing.metadata.logged_at || '')) || 0
+          : -1;
+        if (!existing || loggedAt >= existingLoggedAt) {
+          latestByScheduledTime.set(event.occurred_at, event);
+        }
+      });
+      return [...latestByScheduledTime.values()].reduce(
+        (total, event) => total + event.value,
+        0,
+      );
+    };
     const agentCheckIns = (agentId: string) =>
       checkIns.filter((checkIn) => checkIn.agent_id === agentId);
     const completedForAgent = (agentId: string) =>

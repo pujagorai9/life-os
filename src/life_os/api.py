@@ -980,6 +980,9 @@ def create_app(
 
     @app.post("/v1/events", response_model=ProgressEvent)
     def create_event(request: ProgressEventCreate) -> ProgressEvent:
+        if request.metric in {"pumping_ml", "pumping_minutes"}:
+            event, _ = store.upsert_event_by_occurrence(request)
+            return event
         return store.create_event(request)
 
     @app.post(

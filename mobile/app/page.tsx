@@ -2176,7 +2176,7 @@ export default function Home() {
       isPumpingCheckIn(activeCheckIn) &&
       (!response ||
         !Number.isFinite(pumpingMl) ||
-        pumpingMl <= 0 ||
+        pumpingMl < 0 ||
         pumpingMl > 2000)
     ) {
       setError('Enter the amount pumped in ml before saving.');
@@ -4073,7 +4073,7 @@ or persistent, advise contacting a clinician or lactation professional.`;
                             <Input
                               type="number"
                               inputMode="decimal"
-                              min="1"
+                              min="0"
                               max="2000"
                               step="1"
                               value={checkInResponse}

@@ -5240,16 +5240,9 @@ or persistent, advise contacting a clinician or lactation professional.`;
       {
         label: 'Pumping',
         value: eventTotal('pumping_ml'),
-        target: null,
+        target: 900,
         unit: 'ml',
         color: '#f59e0b',
-      },
-      {
-        label: 'Feeds by you',
-        value: taskWasDone('operations_manager', 'personal feed log') ? 6 : 0,
-        target: 6,
-        unit: 'feeds',
-        color: '#ec4899',
       },
     ];
 

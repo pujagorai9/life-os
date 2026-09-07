@@ -293,6 +293,7 @@ type ResumeState = {
   selectedAgentId: string | null;
   showFullPlan: boolean;
   checkInResponse: string;
+  pumpingMinutes: string;
   chatDraft: string;
   messages: Record<string, ChatMessage[]>;
   wellbeingStep: number;
@@ -656,6 +657,7 @@ const shortTaskTitle = (checkIn: CheckIn) => {
     return 'Daily Briefing';
   }
   if (isFinanceDelivery(checkIn)) return 'Daily Expense Summary';
+  if (isPumpingCheckIn(checkIn)) return 'Pumping session';
   const sourceTitle = compactTaskTitle(checkIn);
   const normalizedTitle = sourceTitle.toLowerCase();
   if (normalizedTitle.includes('after-waking daily mindset ritual')) {
@@ -1293,6 +1295,7 @@ export default function Home() {
   const [chatDraft, setChatDraft] = useState('');
   const [chatting, setChatting] = useState(false);
   const [checkInResponse, setCheckInResponse] = useState('');
+  const [pumpingMinutes, setPumpingMinutes] = useState('');
   const [savingCheckIn, setSavingCheckIn] = useState(false);
   const [logConfirmation, setLogConfirmation] =
     useState<LogConfirmation | null>(null);
@@ -1373,6 +1376,7 @@ export default function Home() {
       setRestoredAgentId(saved.selectedAgentId);
       setShowFullPlan(Boolean(saved.showFullPlan));
       setCheckInResponse(saved.checkInResponse || '');
+      setPumpingMinutes(saved.pumpingMinutes || '');
       setChatDraft(saved.chatDraft || '');
       setMessages(saved.messages || {});
       setWellbeingStep(Math.min(4, Math.max(0, saved.wellbeingStep || 0)));
@@ -1594,6 +1598,7 @@ export default function Home() {
       selectedAgentId: selectedAgent?.id || null,
       showFullPlan,
       checkInResponse,
+      pumpingMinutes,
       chatDraft,
       messages,
       wellbeingStep,
@@ -1619,6 +1624,7 @@ export default function Home() {
     meditationSeconds,
     messages,
     morningAction,
+    pumpingMinutes,
     nutritionAnalyses,
     nutritionMessages,
     nutritionReviewDraft,
@@ -2171,6 +2177,10 @@ export default function Home() {
     const pumpingMl = isPumpingCheckIn(activeCheckIn)
       ? Number(response)
       : null;
+    const pumpingDuration =
+      isPumpingCheckIn(activeCheckIn) && pumpingMinutes.trim()
+        ? Number(pumpingMinutes)
+        : null;
     if (
       outcome !== 'skipped' &&
       isPumpingCheckIn(activeCheckIn) &&
@@ -2180,6 +2190,16 @@ export default function Home() {
         pumpingMl > 2000)
     ) {
       setError('Enter the amount pumped in ml before saving.');
+      return;
+    }
+    if (
+      outcome !== 'skipped' &&
+      pumpingDuration !== null &&
+      (!Number.isFinite(pumpingDuration) ||
+        pumpingDuration <= 0 ||
+        pumpingDuration > 240)
+    ) {
+      setError('Enter pumping time between 1 and 240 minutes, or leave it blank.');
       return;
     }
     setSavingCheckIn(true);
@@ -2255,6 +2275,34 @@ export default function Home() {
               },
             }),
           });
+          if (pumpingDuration !== null) {
+            await lifeOS('/v1/events', {
+              method: 'POST',
+              body: JSON.stringify({
+                tenant_id: TENANT_ID,
+                domain: 'operations_manager',
+                metric: 'pumping_minutes',
+                value: pumpingDuration,
+                unit: 'minutes',
+                source: 'mobile_user_confirmation',
+                confidence: 1,
+                occurred_at: activeCheckIn.due_at,
+                goal_id: activeCheckIn.goal_id,
+                metadata: {
+                  check_in_id: activeCheckIn.id,
+                  prompt_id: activeCheckIn.prompt_id,
+                  tracked_day: selectedDay,
+                  scheduled_time: new Date(
+                    activeCheckIn.due_at,
+                  ).toLocaleTimeString([], {
+                    hour: 'numeric',
+                    minute: '2-digit',
+                  }),
+                  logged_at: new Date().toISOString(),
+                },
+              }),
+            });
+          }
         }
         if (
           activeCheckIn.agent_id === 'nutrition_coach' &&
@@ -2637,6 +2685,7 @@ or persistent, advise contacting a clinician or lactation professional.`;
     setProgress(logConfirmation.updatedProgress);
     setSelectedCheckInId(null);
     setCheckInResponse('');
+    setPumpingMinutes('');
     setNutritionComposerFocused(false);
     setLogConfirmation(null);
     if (destination === 'today') setView('today');
@@ -4069,24 +4118,55 @@ or persistent, advise contacting a clinician or lactation professional.`;
                           </div>
                         )}
                         {isPumpingCheckIn(activeCheckIn) ? (
-                          <div className="relative">
-                            <Input
-                              type="number"
-                              inputMode="decimal"
-                              min="0"
-                              max="2000"
-                              step="1"
-                              value={checkInResponse}
-                              onChange={(event) =>
-                                setCheckInResponse(event.target.value)
-                              }
-                              placeholder="Amount pumped"
-                              aria-label="Amount pumped in millilitres"
-                              className="h-14 rounded-2xl bg-background pr-14 text-lg tabular-nums"
-                            />
-                            <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-sm font-semibold text-muted-foreground">
-                              ml
-                            </span>
+                          <div className="grid grid-cols-2 gap-3">
+                            <label className="space-y-1.5">
+                              <span className="text-xs font-medium text-muted-foreground">
+                                Output
+                              </span>
+                              <div className="relative">
+                                <Input
+                                  type="number"
+                                  inputMode="decimal"
+                                  min="0"
+                                  max="2000"
+                                  step="1"
+                                  value={checkInResponse}
+                                  onChange={(event) =>
+                                    setCheckInResponse(event.target.value)
+                                  }
+                                  placeholder="0"
+                                  aria-label="Amount pumped in millilitres"
+                                  className="h-11 rounded-xl bg-background pr-10 text-base tabular-nums"
+                                />
+                                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-muted-foreground">
+                                  ml
+                                </span>
+                              </div>
+                            </label>
+                            <label className="space-y-1.5">
+                              <span className="text-xs font-medium text-muted-foreground">
+                                Duration <span className="font-normal">(optional)</span>
+                              </span>
+                              <div className="relative">
+                                <Input
+                                  type="number"
+                                  inputMode="numeric"
+                                  min="1"
+                                  max="240"
+                                  step="1"
+                                  value={pumpingMinutes}
+                                  onChange={(event) =>
+                                    setPumpingMinutes(event.target.value)
+                                  }
+                                  placeholder="0"
+                                  aria-label="Pumping duration in minutes"
+                                  className="h-11 rounded-xl bg-background pr-16 text-base tabular-nums"
+                                />
+                                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-muted-foreground">
+                                  minutes
+                                </span>
+                              </div>
+                            </label>
                           </div>
                         ) : (
                           <Textarea
